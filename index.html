@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metrónomo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="metronome-panel" aria-label="Metrónomo">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Web metronome</p>
+            <h1>Metrónomo</h1>
+          </div>
+          <div class="status-pill" id="statusText">Listo</div>
+        </header>
+
+        <div class="workbench">
+          <section class="tempo-zone" aria-label="Tempo actual">
+            <section class="tempo-stage">
+              <button class="icon-button" id="decreaseTempo" type="button" aria-label="Bajar tempo">
+                <span aria-hidden="true">−</span>
+              </button>
+
+              <div class="tempo-display">
+                <div class="pulse-ring" id="pulseRing">
+                  <div class="pendulum">
+                    <div class="pendulum-arm" id="pendulumArm"></div>
+                    <div class="pendulum-dot" id="pendulumDot"></div>
+                  </div>
+                </div>
+                <label for="tempoInput">BPM</label>
+                <input id="tempoInput" type="text" pattern="[0-9]*" value="100" inputmode="numeric" />
+              </div>
+
+              <button class="icon-button" id="increaseTempo" type="button" aria-label="Subir tempo">
+                <span aria-hidden="true">+</span>
+              </button>
+            </section>
+
+            <input class="tempo-slider" id="tempoSlider" type="range" min="30" max="240" value="100" />
+
+            <div class="primary-controls">
+              <button class="tap-button" id="tapTempo" type="button">Tap</button>
+              <button class="play-button" id="togglePlayback" type="button" aria-pressed="false">
+                <span id="playIcon" aria-hidden="true">▶</span>
+                <span id="playLabel">Iniciar</span>
+              </button>
+            </div>
+
+            <section class="beat-row" id="beatRow" aria-label="Pulso visual"></section>
+          </section>
+
+          <section class="controls-zone" aria-label="Ajustes">
+            <label class="control-card">
+              <span>Compás</span>
+              <select id="beatsPerMeasure">
+                <option value="2">2/4</option>
+                <option value="3">3/4</option>
+                <option value="4" selected>4/4</option>
+                <option value="5">5/4</option>
+                <option value="6">6/8</option>
+                <option value="7">7/8</option>
+              </select>
+            </label>
+
+            <label class="control-card">
+              <span>Subdivisión</span>
+              <select id="subdivision">
+                <option value="1" selected>Negras</option>
+                <option value="2">Corcheas</option>
+                <option value="3">Tresillos</option>
+                <option value="4">Semicorcheas</option>
+              </select>
+            </label>
+
+            <label class="control-card">
+              <span>Volumen</span>
+              <input id="volume" type="range" min="0" max="1" step="0.01" value="0.75" />
+            </label>
+
+            <label class="control-card switch-card">
+              <span>Acento</span>
+              <input id="accentToggle" type="checkbox" checked />
+            </label>
+
+            <div class="control-card mic-card">
+              <span>Micrófono</span>
+              <button class="mic-button" id="toggleMic" type="button" aria-pressed="false">Activar</button>
+            </div>
+
+            <label class="control-card">
+              <span>Sincronía <output id="syncOffsetValue">0 ms</output></span>
+              <input id="syncOffset" type="range" min="-150" max="150" step="1" value="0" />
+            </label>
+
+            <label class="control-card">
+              <span>Sensibilidad</span>
+              <input id="micSensitivity" type="range" min="1" max="5" step="0.1" value="2.4" />
+            </label>
+
+            <div class="control-card score-card" aria-live="polite">
+              <span>Precisión</span>
+              <strong id="precisionReadout">--</strong>
+              <small id="streakReadout">Racha 0</small>
+            </div>
+
+            <div class="control-card calibration-card">
+              <div>
+                <span>Calibración</span>
+                <strong id="calibrationReadout">8 golpes</strong>
+              </div>
+              <button class="calibration-button" id="toggleCalibration" type="button">Calibrar</button>
+              <div class="calibration-lane" id="calibrationLane" aria-hidden="true">
+                <div class="calibration-ball" id="calibrationBall"></div>
+                <div class="calibration-target"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="celebration" id="celebration" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

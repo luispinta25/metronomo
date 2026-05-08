@@ -1,0 +1,769 @@
+:root {
+  color-scheme: light;
+  --app-height: 100dvh;
+  --bg: #f7f7f2;
+  --panel: rgba(255, 255, 255, 0.82);
+  --ink: #161616;
+  --muted: #6a6f76;
+  --line: #d9ddd5;
+  --accent: #ff5a3d;
+  --accent-2: #1f8a70;
+  --good: #1f8a70;
+  --warn: #e4a11b;
+  --bad: #e24b3b;
+  --feedback: transparent;
+  --shadow: 0 28px 80px rgba(24, 28, 32, 0.14);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: var(--app-height);
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(255, 90, 61, 0.09), transparent 34%),
+    linear-gradient(315deg, rgba(31, 138, 112, 0.12), transparent 38%),
+    var(--bg);
+}
+
+body::before,
+body::after {
+  position: fixed;
+  z-index: 0;
+  width: min(28vw, 170px);
+  height: min(28vw, 170px);
+  border-color: var(--feedback);
+  border-style: solid;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+body::before {
+  top: 14px;
+  left: 14px;
+  border-width: 5px 0 0 5px;
+  border-radius: 28px 0 0 0;
+}
+
+body::after {
+  right: 14px;
+  bottom: 14px;
+  border-width: 0 5px 5px 0;
+  border-radius: 0 0 28px 0;
+}
+
+body.timing-good {
+  --feedback: var(--good);
+}
+
+body.timing-warn {
+  --feedback: var(--warn);
+}
+
+body.timing-bad {
+  --feedback: var(--bad);
+}
+
+body.timing-good::before,
+body.timing-good::after,
+body.timing-warn::before,
+body.timing-warn::after,
+body.timing-bad::before,
+body.timing-bad::after {
+  opacity: 1;
+  transform: scale(1.02);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: var(--app-height);
+  place-items: center;
+  padding: 24px;
+}
+
+.metronome-panel {
+  position: relative;
+  width: min(100%, 520px);
+  padding: 28px;
+  border: 2px solid color-mix(in srgb, var(--feedback) 36%, rgba(255, 255, 255, 0.72));
+  border-radius: 28px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(22px);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+body.timing-good .metronome-panel,
+body.timing-warn .metronome-panel,
+body.timing-bad .metronome-panel {
+  box-shadow: var(--shadow), 0 0 0 8px color-mix(in srgb, var(--feedback) 12%, transparent);
+}
+
+.workbench {
+  display: grid;
+}
+
+.tempo-zone,
+.controls-zone {
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent-2);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 3.4rem);
+  line-height: 0.95;
+}
+
+.status-pill {
+  min-width: 74px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tempo-stage {
+  display: grid;
+  grid-template-columns: 54px 1fr 54px;
+  align-items: center;
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.icon-button {
+  display: grid;
+  width: 54px;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 2rem;
+  font-weight: 600;
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.icon-button:hover {
+  border-color: rgba(255, 90, 61, 0.45);
+  transform: translateY(-1px);
+}
+
+.tempo-display {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.pulse-ring {
+  position: relative;
+  display: grid;
+  width: min(58vw, 230px);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.95) 0 48%, transparent 49%),
+    conic-gradient(from 0deg, rgba(255, 90, 61, 0.18), rgba(31, 138, 112, 0.18), rgba(255, 90, 61, 0.18));
+  transition: transform 80ms ease, box-shadow 80ms ease;
+}
+
+.pulse-ring.is-hit {
+  box-shadow: 0 0 0 10px rgba(255, 90, 61, 0.1);
+  transform: scale(1.025);
+}
+
+.pendulum {
+  position: absolute;
+  inset: 20px;
+  display: grid;
+  place-items: center;
+}
+
+.pendulum-arm {
+  position: absolute;
+  bottom: 50%;
+  width: 4px;
+  height: 78px;
+  border-radius: 999px;
+  background: var(--ink);
+  transform-origin: bottom center;
+  transform: rotate(-22deg);
+  transition: transform 110ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pendulum-dot {
+  position: absolute;
+  top: 42px;
+  width: 18px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateX(-31px);
+  transition: transform 110ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tempo-display label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+#tempoInput {
+  width: min(100%, 240px);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: clamp(3.6rem, 17vw, 6rem);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+#tempoInput:focus {
+  outline: none;
+}
+
+.tempo-slider {
+  width: 100%;
+  margin: 26px 0 22px;
+  accent-color: var(--accent);
+}
+
+.primary-controls {
+  display: grid;
+  grid-template-columns: 1fr 1.45fr;
+  gap: 12px;
+}
+
+.tap-button,
+.play-button {
+  min-height: 58px;
+  border-radius: 18px;
+  font-weight: 800;
+}
+
+.tap-button {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.play-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--ink);
+  color: #ffffff;
+  box-shadow: 0 14px 32px rgba(22, 22, 22, 0.22);
+}
+
+.play-button.is-playing {
+  background: var(--accent);
+}
+
+.controls-zone {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.control-card {
+  display: grid;
+  min-height: 78px;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.control-card span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.control-card select,
+.control-card input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.control-card select {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 800;
+  outline: none;
+}
+
+.switch-card {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.switch-card input {
+  width: 46px;
+  height: 24px;
+  accent-color: var(--accent-2);
+}
+
+.mic-card {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.mic-button {
+  min-width: 86px;
+  min-height: 38px;
+  border-radius: 13px;
+  background: var(--ink);
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.mic-button.is-listening {
+  background: var(--accent-2);
+}
+
+.control-card output {
+  float: right;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.score-card {
+  align-content: center;
+}
+
+.score-card strong {
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.score-card small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.calibration-card {
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.calibration-card > div:first-child {
+  display: grid;
+  gap: 7px;
+}
+
+.calibration-card strong {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.calibration-button {
+  min-width: 96px;
+  min-height: 40px;
+  border-radius: 13px;
+  background: var(--ink);
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.calibration-button.is-active {
+  background: var(--accent);
+}
+
+.calibration-lane {
+  position: relative;
+  grid-column: 1 / -1;
+  height: 64px;
+  margin-top: 2px;
+  overflow: hidden;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(31, 138, 112, 0.07), rgba(255, 90, 61, 0.06)),
+    rgba(255, 255, 255, 0.7);
+}
+
+.calibration-ball {
+  position: absolute;
+  left: calc(var(--ball-x, 0.5) * 100%);
+  bottom: calc(var(--ball-y, 0.82) * 42px + 10px);
+  width: 18px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 8px 18px rgba(255, 90, 61, 0.28);
+  transform: translateX(-50%);
+}
+
+.calibration-target {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  left: 12px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
+}
+
+body.calibrating .calibration-lane {
+  outline: 2px solid rgba(255, 90, 61, 0.16);
+}
+
+.celebration {
+  position: absolute;
+  right: 24px;
+  bottom: 20px;
+  max-width: min(300px, calc(100% - 48px));
+  padding: 12px 14px;
+  border: 1px solid rgba(31, 138, 112, 0.24);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+  font-weight: 800;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.celebration.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.beat-row {
+  display: grid;
+  grid-template-columns: repeat(var(--beats, 4), 1fr);
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.beat-dot {
+  height: 9px;
+  border-radius: 999px;
+  background: #d7dcd4;
+  transition: background-color 90ms ease, transform 90ms ease;
+}
+
+.beat-dot.is-active {
+  background: var(--accent);
+  transform: scaleY(1.6);
+}
+
+.beat-dot.is-accent {
+  background: var(--accent-2);
+}
+
+@media (min-width: 880px) and (min-height: 620px) {
+  .app-shell {
+    padding: 36px;
+  }
+
+  .metronome-panel {
+    width: min(100%, 980px);
+    padding: 34px;
+  }
+
+  .topbar {
+    align-items: center;
+  }
+
+  h1 {
+    font-size: clamp(3.4rem, 5.6vw, 5rem);
+  }
+
+  .workbench {
+    grid-template-columns: minmax(430px, 1fr) minmax(360px, 0.86fr);
+    align-items: center;
+    gap: 28px;
+    margin-top: 26px;
+  }
+
+  .tempo-stage {
+    grid-template-columns: 58px minmax(270px, 1fr) 58px;
+    margin-top: 0;
+  }
+
+  .pulse-ring {
+    width: min(28vw, 300px);
+  }
+
+  #tempoInput {
+    font-size: clamp(5.8rem, 9vw, 8.8rem);
+  }
+
+  .tempo-slider {
+    margin: 20px 0 18px;
+  }
+
+  .controls-zone {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: center;
+    margin-top: 0;
+  }
+
+  .control-card {
+    min-height: 82px;
+    padding: 14px;
+  }
+
+  .calibration-card {
+    min-height: 120px;
+  }
+
+  .beat-row {
+    margin-top: 18px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 620px) {
+  .app-shell {
+    align-items: start;
+    padding: 8px;
+  }
+
+  .metronome-panel {
+    width: min(100%, 980px);
+    padding: 12px 16px;
+    border-radius: 20px;
+  }
+
+  .topbar {
+    align-items: center;
+  }
+
+  .eyebrow {
+    margin-bottom: 2px;
+    font-size: 0.66rem;
+  }
+
+  h1 {
+    font-size: clamp(1.85rem, 3.6vw, 2.35rem);
+    line-height: 0.92;
+  }
+
+  .status-pill {
+    padding: 7px 10px;
+    font-size: 0.78rem;
+  }
+
+  .workbench {
+    grid-template-columns: minmax(390px, 1fr) minmax(240px, 0.62fr);
+    align-items: center;
+    gap: 16px;
+    margin-top: 6px;
+  }
+
+  .tempo-stage {
+    grid-template-columns: 44px minmax(240px, 1fr) 44px;
+    gap: 10px;
+    margin-top: 0;
+  }
+
+  .icon-button {
+    width: 44px;
+    border-radius: 14px;
+    font-size: 1.6rem;
+  }
+
+  .pulse-ring {
+    width: min(28vh, 148px);
+  }
+
+  .pendulum-arm {
+    height: 46px;
+  }
+
+  .pendulum-dot {
+    top: 25px;
+    width: 14px;
+  }
+
+  .tempo-display {
+    gap: 3px;
+  }
+
+  #tempoInput {
+    font-size: clamp(3rem, 9vw, 4.45rem);
+  }
+
+  .tempo-slider {
+    margin: 7px 0 9px;
+  }
+
+  .primary-controls {
+    grid-template-columns: 0.85fr 1.25fr;
+  }
+
+  .tap-button,
+  .play-button {
+    min-height: 42px;
+    border-radius: 15px;
+  }
+
+  .controls-zone {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 0;
+  }
+
+  .control-card {
+    min-height: 58px;
+    padding: 10px;
+    border-radius: 15px;
+  }
+
+  .control-card span {
+    font-size: 0.76rem;
+  }
+
+  .mic-card {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .mic-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 32px;
+    border-radius: 11px;
+    font-size: 0.9rem;
+  }
+
+  .calibration-card {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr auto;
+    min-height: 72px;
+  }
+
+  .calibration-lane {
+    height: 38px;
+  }
+
+  .calibration-ball {
+    bottom: calc(var(--ball-y, 0.82) * 18px + 8px);
+    width: 14px;
+  }
+
+  .score-card strong {
+    font-size: 1.15rem;
+  }
+
+  .celebration {
+    right: 16px;
+    bottom: 12px;
+    padding: 9px 11px;
+    font-size: 0.86rem;
+  }
+
+  .beat-row {
+    margin-top: 8px;
+  }
+
+  .beat-dot {
+    height: 7px;
+  }
+}
+
+@media (max-width: 520px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .metronome-panel {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .tempo-stage {
+    grid-template-columns: 46px 1fr 46px;
+    gap: 10px;
+  }
+
+  .icon-button {
+    width: 46px;
+    border-radius: 15px;
+  }
+
+  .primary-controls,
+  .controls-zone {
+    grid-template-columns: 1fr;
+  }
+
+  .celebration {
+    position: sticky;
+    bottom: 12px;
+    margin-top: 14px;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .topbar {
+    align-items: center;
+  }
+
+  h1 {
+    font-size: 2rem;
+  }
+
+  .status-pill {
+    min-width: 64px;
+    padding: 8px 10px;
+  }
+
+  .pulse-ring {
+    width: min(56vw, 190px);
+  }
+
+  #tempoInput {
+    font-size: 3.8rem;
+  }
+}

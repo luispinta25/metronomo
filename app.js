@@ -9,6 +9,8 @@ const state = {
   nextNoteTime: 0,
   schedulerId: null,
   audioContext: null,
+  masterGain: null,
+  outputCompressor: null,
   tapTimes: [],
   swingSide: false,
   practiceStartTime: 0,
@@ -20,6 +22,7 @@ const state = {
   micRafId: null,
   micSensitivity: 2.4,
   syncOffset: 0,
+  micOutputBoost: 1,
   noiseFloor: 0.012,
   previousMicLevel: 0,
   lastOnsetTime: 0,
@@ -64,6 +67,23 @@ const celebration = document.querySelector("#celebration");
 const toggleCalibration = document.querySelector("#toggleCalibration");
 const calibrationReadout = document.querySelector("#calibrationReadout");
 const calibrationLane = document.querySelector("#calibrationLane");
+
+function isIOSDevice() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function setAudioSessionType(type) {
+  if (!navigator.audioSession) return;
+
+  try {
+    navigator.audioSession.type = type;
+  } catch {
+    // Some Safari versions expose the API but reject specific transitions.
+  }
+}
 
 function syncViewportProfile() {
   const viewport = window.visualViewport;
@@ -161,11 +181,27 @@ function ensureAudioContext() {
   if (!state.audioContext) {
     const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
     state.audioContext = new AudioContextConstructor();
+    state.outputCompressor = state.audioContext.createDynamicsCompressor();
+    state.masterGain = state.audioContext.createGain();
+    state.outputCompressor.threshold.setValueAtTime(-8, state.audioContext.currentTime);
+    state.outputCompressor.knee.setValueAtTime(18, state.audioContext.currentTime);
+    state.outputCompressor.ratio.setValueAtTime(6, state.audioContext.currentTime);
+    state.outputCompressor.attack.setValueAtTime(0.002, state.audioContext.currentTime);
+    state.outputCompressor.release.setValueAtTime(0.08, state.audioContext.currentTime);
+    state.masterGain.connect(state.outputCompressor);
+    state.outputCompressor.connect(state.audioContext.destination);
   }
 
   if (state.audioContext.state === "suspended") {
     state.audioContext.resume();
   }
+}
+
+function updateMasterGain() {
+  if (!state.masterGain || !state.audioContext) return;
+
+  const gain = state.isMicActive && isIOSDevice() ? state.micOutputBoost : 1;
+  state.masterGain.gain.setTargetAtTime(gain, state.audioContext.currentTime, 0.015);
 }
 
 function updatePracticeReadout(text = "--") {
@@ -399,6 +435,7 @@ async function startMic() {
 
   ensureAudioContext();
   statusText.textContent = "Mic...";
+  setAudioSessionType("auto");
 
   try {
     state.micStream = await navigator.mediaDevices.getUserMedia({
@@ -410,6 +447,7 @@ async function startMic() {
       video: false,
     });
 
+    setAudioSessionType("play-and-record");
     state.micSource = state.audioContext.createMediaStreamSource(state.micStream);
     state.analyser = state.audioContext.createAnalyser();
     state.analyser.fftSize = 1024;
@@ -420,6 +458,7 @@ async function startMic() {
     state.lastOnsetTime = 0;
     state.micSource.connect(state.analyser);
     state.isMicActive = true;
+    updateMasterGain();
     toggleMic.classList.add("is-listening");
     toggleMic.setAttribute("aria-pressed", "true");
     toggleMic.textContent = "Oyendo";
@@ -447,6 +486,9 @@ function stopMic() {
   state.micStream = null;
   state.analyser = null;
   state.micData = null;
+  updateMasterGain();
+  setAudioSessionType("playback");
+  setAudioSessionType("auto");
   toggleMic.classList.remove("is-listening");
   toggleMic.setAttribute("aria-pressed", "false");
   toggleMic.textContent = "Activar";
@@ -470,7 +512,7 @@ function playClick(time, isAccent, isSubdivision) {
 
   oscillator.connect(filter);
   filter.connect(gain);
-  gain.connect(context.destination);
+  gain.connect(state.masterGain || context.destination);
   oscillator.start(time);
   oscillator.stop(time + 0.07);
 }

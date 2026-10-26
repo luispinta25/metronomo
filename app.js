@@ -625,7 +625,7 @@ $("btnTheme").addEventListener("click", () => {
       const s = document.createElement("button");
       s.className = "swatch" + (id === "auto" ? " auto" : "") + (id === themeChoice ? " sel" : "");
       if (id !== "auto") s.dataset.theme = id;
-      const ctlFor = id === "auto" ? "Del sistema" : CTL_NAME[CTL_BY_THEME[id]];
+      const ctlFor = id === "auto" ? "Sistema" : CTL_NAME[CTL_BY_THEME[id]];
       s.innerHTML = `<span>${name}</span><small>${ctlFor}</small>`;
       s.onclick = () => {
         themeChoice = id; store.set("metro.theme", id); applyTheme();
@@ -669,8 +669,9 @@ function timerRender() {
     pill.hidden = !tRunning || !!(typeof run !== "undefined" && run);
     if (tRunning) {
       pill.querySelector("b").textContent = fmtTime(timerSecs());
-      pill.querySelector("small").textContent = tPaused ? "Temporizador en pausa" : "Temporizador";
+      pill.querySelector("small").textContent = tPaused ? "En pausa" : "Restante";
     }
+    if (typeof syncHeroPill === "function") syncHeroPill();
   }
 }
 function timerTick() {
@@ -1132,7 +1133,7 @@ function startRun(p, segs, unit) {
   barHook = unit === "bars" ? runBarHook : null;
   if (unit === "time") setBpm(planAt(segs, 0).bpm);
   $("rgSvg").innerHTML = graphSVG(segs, { h: 64, labels: true, axis: false, unit });
-  $("rcInt").textContent = "--"; $("rcTot").textContent = "--"; $("rcBar").style.width = "0%";
+  $("rcInt").textContent = "--"; $("rcTot").textContent = "--"; $("rcIntSub").textContent = ""; $("rcTotSub").textContent = ""; $("rcBar").style.width = "0%";
   start();
   renderRunCtl();
   practiceTick();
@@ -1154,7 +1155,7 @@ function finishRun() {
   chime(); stop();
   runDone = desc;
   setCursor($("runGraph"), 1);
-  $("rcIntLbl").textContent = "Completada"; $("rcInt").textContent = "0"; $("rcTot").textContent = "0:00"; $("rcBar").style.width = "100%";
+  $("rcIntLbl").textContent = "Completada"; $("rcInt").textContent = "0:00"; $("rcIntSub").textContent = ""; $("rcTot").textContent = "0:00"; $("rcBar").style.width = "100%";
   $("rcIntBox").classList.remove("soon", "urgent");
   renderRunCtl();
   $("status").textContent = "Práctica completada";
@@ -1193,12 +1194,16 @@ function trendOf(segs, el) {
 function updateTrend(t) {
   const el = $("trend"), num = $("bpmNum");
   num.classList.remove("up", "down");
-  if (!run) { el.hidden = true; return; }
+  if (!run) { el.hidden = true; syncHeroPill(); return; }
   if (run.paused) { setTrend(el, "hold", "pause", "En pausa", `${state.bpm} BPM`); return; }
-  if (!t) { el.hidden = true; return; }
+  if (!t) { el.hidden = true; syncHeroPill(); return; }
   if (t.dir > 0) { setTrend(el, "up", "angles-up", "Subiendo", `hacia ${t.target} BPM`); num.classList.add("up"); }
   else if (t.dir < 0) { setTrend(el, "down", "angles-down", "Bajando", `hacia ${t.target} BPM`); num.classList.add("down"); }
   else setTrend(el, "hold", "equals", "Estable", t.next ? `luego ${t.next} BPM` : `en ${t.target} BPM`);
+}
+function syncHeroPill() {
+  const t = $("trend"), p = $("tpill");
+  document.querySelector(".hero").classList.toggle("withpill", !!((t && !t.hidden) || (p && !p.hidden)));
 }
 function setTrend(el, cls, icon, title, sub) {
   el.hidden = false;
@@ -1206,51 +1211,59 @@ function setTrend(el, cls, icon, title, sub) {
   el.querySelector("i").className = `fa-solid fa-${icon}`;
   el.querySelector("b").textContent = title;
   el.querySelector("small").textContent = sub;
+  syncHeroPill();
 }
-// Datos del tramo actual: cuánto queda y si es el último.
+// Datos del tramo actual: cuánto queda del tramo y del intervalo, y si es el último.
 function countdownInfo(segs, el) {
   let t = 0;
   for (let i = 0; i < segs.length; i++) {
     const end = t + segs[i].len;
-    if (el < end || i === segs.length - 1) return { seg: segs[i], i, left: Math.max(0, end - el), isLast: i === segs.length - 1 };
+    if (el < end || i === segs.length - 1) {
+      let ivEnd = end, j = i;
+      while (segs[i].iv && j + 1 < segs.length && segs[j + 1].iv === segs[i].iv) { ivEnd += segs[j + 1].len; j++; }
+      return { seg: segs[i], i, left: Math.max(0, end - el), ivLeft: Math.max(0, ivEnd - el), isLast: i === segs.length - 1 };
+    }
     t = end;
   }
   return null;
 }
-// La cuenta regresiva grande solo aparece en los últimos 10 s antes de un cambio (o del final);
-// el resto del tiempo el panel muestra información tranquila para no distraer.
+const fmtCount = (sec) => fmtTime(Math.max(0, Math.ceil(sec - 1e-6)));
+// El tiempo que queda del intervalo y del total siempre se ven. Los últimos 10 s antes de un
+// cambio (o del final) se destacan con una cuenta grande; fuera de esa ventana el aviso es discreto.
 const COUNT_WINDOW = 10.4;
 function updateCountdown(el) {
-  const { segs, total, unit } = run, ci = countdownInfo(segs, el);
+  const { segs, total, unit, p } = run, ci = countdownInfo(segs, el);
   if (!ci) return;
-  const s = ci.seg, nx = segs[ci.i + 1], hold = s.from === s.to;
-  const remSec = unit === "bars" ? (ci.left * state.num * 60) / Math.max(20, state.bpm) : ci.left;
-  const inWindow = remSec <= COUNT_WINDOW;
-  let lbl, val, soon = false;
-  if (inWindow && (hold || ci.isLast)) {
+  const s = ci.seg, nx = segs[ci.i + 1], hold = s.from === s.to, bars = unit === "bars";
+  const toSec = (v) => (bars ? (v * state.num * 60) / Math.max(20, state.bpm) : v);
+  const inWindow = toSec(ci.left) <= COUNT_WINDOW && (hold || ci.isLast);
+  const beatsLeft = Math.max(1, Math.round(ci.left * state.num));
+  const name = s.meta && s.meta.name ? s.meta.name : s.iv ? `Intervalo ${s.iv}/${s.n}` : segs.length > 1 ? `Tramo ${ci.i + 1}/${segs.length}` : "Gradual";
+  const sig = ci.isLast ? "Último tramo" : hold ? (nx.to > s.to ? `Después: subir a ${nx.to} BPM` : nx.to < s.to ? `Después: bajar a ${nx.to} BPM` : `Después: seguir en ${nx.to} BPM`) : `Llegando a ${s.to} BPM`;
+  let lbl, val, sub, soon = false;
+  if (inWindow) {
     soon = true;
-    val = String(unit === "bars" ? Math.max(1, Math.round(ci.left * state.num)) : Math.max(1, Math.ceil(remSec - 1e-6)));
-    if (ci.isLast) lbl = "Termina en";
-    else if (nx.from !== nx.to) lbl = nx.to > s.to ? "Empezamos a subir en" : "Empezamos a bajar en";
-    else lbl = `Cambia a ${nx.to} BPM en`;
-    if (unit === "bars") lbl += " (tiempos)";
-  } else if (!hold) {
-    lbl = "Llegando a"; val = `${s.to} BPM`;
-  } else if (ci.isLast) {
-    lbl = "Último tramo"; val = `${s.to} BPM`;
+    val = String(bars ? beatsLeft : Math.max(1, Math.ceil(ci.left - 1e-6)));
+    lbl = ci.isLast ? "Termina en" : nx.from !== nx.to ? (nx.to > s.to ? "Empezamos a subir en" : "Empezamos a bajar en") : `Cambia a ${nx.to} BPM en`;
+    sub = bars ? "tiempos" : "segundos";
   } else {
-    lbl = nx.to > s.to ? "Después: subir a" : nx.to < s.to ? "Después: bajar a" : "Después: seguir en";
-    val = `${nx.to} BPM`;
+    lbl = name;
+    val = bars ? `${Math.max(1, Math.ceil(ci.ivLeft - 1e-6))} comp.` : fmtCount(ci.ivLeft);
+    sub = sig;
   }
-  const box = $("rcIntBox"), num = $("rcInt");
+  const num = $("rcInt");
   $("rcIntLbl").textContent = lbl;
+  $("rcIntSub").textContent = sub;
   if (num.textContent !== val) {
     num.textContent = val;
     if (soon) { num.classList.remove("tick"); void num.offsetWidth; num.classList.add("tick"); }
   }
+  const box = $("rcIntBox");
   box.classList.toggle("soon", soon);
   box.classList.toggle("urgent", soon && Number(val) <= 3);
-  $("rcTot").textContent = unit === "bars" ? `${Math.max(0, Math.ceil(total - el))} comp.` : fmtTime(Math.max(0, Math.ceil(total - el)));
+  const remTot = Math.max(0, total - el);
+  $("rcTot").textContent = bars ? `${Math.max(0, Math.ceil(remTot - 1e-6))} comp.` : fmtCount(remTot);
+  $("rcTotSub").textContent = `de ${bars ? `${total} comp.` : fmtTime(Math.round(total))}`;
   $("rcBar").style.width = `${clamp(el / total, 0, 1) * 100}%`;
 }
 function practiceTick() {
@@ -1280,6 +1293,8 @@ function renderRunCtl() {
   const box = $("runGraph"), ctl = $("runCtl"), cur = run || runDone;
   box.hidden = !cur;
   $("viewMetro").querySelector(".hero").classList.toggle("runmode", !!run);
+  $("viewMetro").classList.toggle("runpanel", !!cur);
+  $("viewMetro").querySelector(".hero").classList.toggle("compact", !!cur);
   timerRender();
   ctl.innerHTML = "";
   if (!cur) { updateTrend(); return; }

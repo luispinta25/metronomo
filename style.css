@@ -435,7 +435,7 @@ p.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 .iv-trans { margin-top: 10px; }
 .iv-mode .note { margin: 6px 0 0; }
 #bpmNum.up { color: var(--accent); } #bpmNum.down { color: #ff9f43; }
-.hero.runmode .bpm span { font-size: clamp(52px, 8dvh, 68px); }
+.hero.compact .bpm span { font-size: clamp(52px, 8dvh, 68px); }
 .trend small { white-space: nowrap; }
 .run-graph { margin-bottom: 8px; }
 
@@ -460,10 +460,103 @@ p.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 .hero.runmode .tpill { display: none; }
 
 /* Durante una práctica, la tarjeta principal se compacta para dar espacio al panel */
-.hero.runmode { padding-bottom: 12px; }
-.hero.runmode .pads { height: clamp(52px, 7.5dvh, 72px); }
-.hero.runmode .chips-row { margin: 6px 0 8px; }
-.hero.runmode .chip { height: 32px; font-size: 13px; }
+.hero.compact { padding-bottom: 12px; }
+.hero.compact .pads { height: clamp(52px, 7.5dvh, 72px); }
+.hero.compact .chips-row { margin: 6px 0 8px; }
+.hero.compact .chip { height: 32px; font-size: 13px; }
 .run-graph { padding: 6px 8px; }
 .run-ctl button { height: 34px; }
 .rc-int.soon b { font-size: 34px; }
+
+/* Cuenta regresiva informativa: intervalo (principal) y total */
+.rc em { font-style: normal; font-size: 10px; font-weight: 600; color: var(--muted); line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc b { font-size: 22px; color: var(--text); }
+.rc-int { flex: 1.45; }
+.rc-tot b { font-size: 22px; }
+.rc-int.soon b { font-size: 34px; color: var(--accent); line-height: 1; }
+.rc-int.soon em, .rc-int.soon small { color: var(--accent); }
+.rc-int.urgent em, .rc-int.urgent small, .rc-int.urgent b { color: #ff9f43; }
+.rc small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* ---------- Ajustes de diseño tras la auditoría de superposiciones ---------- */
+#viewMetro { overflow-y: auto; overflow-x: hidden; }
+.dial-wrap { min-height: 150px; flex-shrink: 0; flex-basis: auto; }
+#viewMetro .dial-wrap { flex: 1 0 150px; }
+
+/* Cabecera de la tarjeta: la píldora nunca desborda y el número se achica si hace falta */
+.hero-top { gap: 8px; flex-wrap: nowrap; }
+.hero-top .bpm { flex: 0 1 auto; min-width: 0; }
+.hero-top .trend { flex: 0 1 auto; min-width: 0; max-width: 52%; }
+.trend > div { min-width: 0; }
+.trend b, .trend small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.hero.withpill .bpm span { font-size: clamp(50px, 15.5vw, 68px); }
+.hero.withpill .bpm small { display: none; }
+
+/* Controles que escalan con el espacio disponible */
+.ruler-view { height: clamp(52px, 36cqh, 130px); }
+.round { width: clamp(38px, 21cqh, 56px); height: clamp(38px, 21cqh, 56px); }
+.round.big { width: clamp(52px, 36cqh, 84px); height: clamp(52px, 36cqh, 84px); font-size: clamp(22px, 14cqh, 30px); }
+.ctl-ruler { gap: clamp(8px, 6cqh, 18px); }
+.ruler-ctl { gap: clamp(14px, 18cqw, 22px); }
+@container (max-height: 215px) { .ctl .hint { display: none; } }
+
+/* Pantallas bajas: se compacta en etapas para que nada se monte */
+@media (max-height: 780px) {
+  #viewMetro.runpanel .hero .chips-row { display: none; }
+  .tabbar { padding: 4px; margin-bottom: calc(var(--safe-b) + 4px); }
+  .tab { padding: 5px 0; }
+  .tab i { font-size: 17px; }
+}
+@media (max-height: 720px) {
+  #viewMetro.runpanel #rgSvg { display: none; }
+  .bpm span { font-size: clamp(52px, 9dvh, 64px); }
+  .pads { height: clamp(60px, 10.5dvh, 96px); }
+  .hero { padding: 10px 14px 12px; }
+  .chips-row { margin: 8px 0 10px; }
+  .status { margin-top: 4px; min-height: 20px; }
+  .bottom-row { padding: 6px 0 8px; }
+}
+@media (max-height: 640px) {
+  #viewMetro.runpanel .dial-wrap { display: none; }
+  .hero.compact .pads { height: 44px; }
+}
+@media (max-height: 720px) {
+  .songbar { padding: 4px 6px; }
+  .songbar button { height: 34px; }
+  .rc { padding: 4px 8px; }
+  .rc b { font-size: 19px; }
+  .rc-int.soon b { font-size: 28px; }
+  .run-count { margin-bottom: 4px; }
+  .run-graph { padding: 5px 7px; margin-bottom: 6px; }
+  .run-ctl { margin-top: 4px; }
+  .rc-bar { margin-bottom: 4px; }
+}
+.ctl-pend .hint { display: none; }
+
+/* ---------- Orbe: escenario propio, sin superposiciones ---------- */
+.ctl-orb { width: 100cqw; height: 100cqh; align-self: stretch; --os: min(calc(100cqh - 24px), calc(100cqw - 150px)); }
+.orb-stage { position: absolute; top: 0; left: 50%; width: var(--os); height: var(--os); margin-left: calc(var(--os) / -2); }
+.orb-dots { position: absolute; inset: 0; }
+.orb-dots i { position: absolute; inset: 0; width: auto; height: auto; margin: 0; border: 0; background: none; box-shadow: none; transform: rotate(var(--a)); }
+.orb-dots i::before { content: ""; position: absolute; left: 50%; top: 1%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
+  background: var(--cell-off); border: 1px solid var(--border); transform: scale(var(--s)); transition: background .08s, box-shadow .08s; }
+.orb-dots i.on { background: none; box-shadow: none; }
+.orb-dots i.on::before { background: var(--accent); box-shadow: 0 0 14px var(--accent); }
+.orb-btn { top: 50%; bottom: auto; transform: translateY(-50%); width: clamp(44px, 34cqh, 56px); height: clamp(44px, 34cqh, 56px); }
+.ctl-orb .hint { bottom: 0; left: 0; right: 0; }
+@container (max-height: 215px) { .ctl-orb { --os: min(100cqh, calc(100cqw - 150px)); } }
+
+.songbar { padding: 5px 6px; }
+.songbar button { height: 36px; }
+.status { min-height: 18px; margin-top: 4px; font-size: 12.5px; }
+.run-graph { margin-bottom: 6px; }
+
+/* Acciones del diálogo siempre al alcance, aunque el contenido se desplace */
+.sheet-actions { position: sticky; bottom: calc(-1 * (var(--safe-b) + 18px)); margin: 14px -18px calc(-1 * (var(--safe-b) + 18px));
+  padding: 12px 18px calc(var(--safe-b) + 18px); background: var(--sheet); border-top: 1px solid var(--border); z-index: 2; }
+
+/* Rótulos de tema que caben en tres columnas */
+.swatch { font-size: 12px; padding: 8px; }
+.swatch span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swatch small { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swatch.auto span, .swatch.auto small { padding: 2px 6px; max-width: 100%; }

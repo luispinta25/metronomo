@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=16">
+<link rel="stylesheet" href="style.css?v=24">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -70,8 +70,8 @@
     </div>
     <div class="run-graph" id="runGraph" hidden>
       <div class="run-count">
-        <div class="rc rc-int" id="rcIntBox"><small id="rcIntLbl">Próximo cambio</small><b id="rcInt">--</b></div>
-        <div class="rc rc-tot"><small>Restante</small><b id="rcTot">--</b></div>
+        <div class="rc rc-int" id="rcIntBox"><small id="rcIntLbl">Intervalo</small><b id="rcInt">--</b><em id="rcIntSub"></em></div>
+        <div class="rc rc-tot"><small>Total restante</small><b id="rcTot">--</b><em id="rcTotSub"></em></div>
       </div>
       <div class="rc-bar"><i id="rcBar"></i></div>
       <div id="rgSvg"></div>
@@ -112,11 +112,13 @@
 
       <!-- Orbe -->
       <div class="ctl ctl-orb" id="orb">
-        <div class="orb-dots" id="orbDots"></div>
-        <div class="orb-core" id="orbCore">
-          <span class="orb-bpm" id="orbBpm">62</span>
-          <small>BPM</small>
-          <i class="fa-solid fa-play" id="orbIco"></i>
+        <div class="orb-stage">
+          <div class="orb-dots" id="orbDots"></div>
+          <div class="orb-core" id="orbCore">
+            <span class="orb-bpm" id="orbBpm">62</span>
+            <small>BPM</small>
+            <i class="fa-solid fa-play" id="orbIco"></i>
+          </div>
         </div>
         <button class="mini orb-btn left js-minus" aria-label="Bajar tempo"><i class="fa-solid fa-minus"></i></button>
         <button class="mini orb-btn right js-plus" aria-label="Subir tempo"><i class="fa-solid fa-plus"></i></button>
@@ -209,6 +211,6 @@
   </div>
 </div>
 
-<script src="app.js?v=15"></script>
+<script src="app.js?v=24"></script>
 </body>
 </html>

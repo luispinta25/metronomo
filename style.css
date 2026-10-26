@@ -288,3 +288,30 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 /* Orbe: botones de ajuste fino */
 .orb-btn { position: absolute; bottom: 14px; width: 56px; height: 56px; font-size: 18px; z-index: 2; }
 .orb-btn.left { left: 0; } .orb-btn.right { right: 0; }
+
+/* ---------- Botones: estado inactivo visible ---------- */
+:root { --btn: rgba(255, 255, 255, .1); --btn-border: rgba(255, 255, 255, .22); --btn-press: rgba(255, 255, 255, .2); }
+[data-theme="claro"] { --btn: rgba(15, 23, 51, .06); --btn-border: rgba(15, 23, 51, .22); --btn-press: rgba(15, 23, 51, .14); }
+
+.chips button, .stepper button, .sheet-actions button, .pcell, .mini, .round, .chip, .icon-btn, .tools button, .btn-wide {
+  background: var(--btn); border: 1px solid var(--btn-border); box-shadow: 0 1px 0 rgba(255, 255, 255, .06);
+}
+.chips button:active, .stepper button:active, .sheet-actions button:active, .pcell:active, .mini:active, .round:active, .chip:active,
+.icon-btn:active, .tools button:active, .btn-wide:active { background: var(--btn-press); }
+.pcell { border: 2px solid var(--btn-border); }
+.pcell.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--btn)); }
+.chips button { padding: 10px 16px; }
+.chips button.sel { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.sheet-actions button.primary, .sheet-actions button.danger { border-color: transparent; }
+.tools button.active { border-color: var(--accent); }
+.mini.main, .round.big { border: 0; }
+.switch { background: var(--btn-border); border: 0; }
+.switch.on { background: var(--accent); }
+
+/* Tema automático: rótulos legibles sobre el fondo partido */
+.swatch.auto span, .swatch.auto small { background: rgba(10, 15, 40, .85); color: #fff; padding: 2px 8px; border-radius: 8px; mix-blend-mode: normal; opacity: 1; }
+.swatch.auto small { margin-top: 3px; }
+.swatch { border-color: var(--btn-border); }
+.swatch.sel { border-color: var(--accent); }
+.swatch.auto span, .swatch.auto small { white-space: nowrap; width: fit-content; }
+.swatch.auto small { font-size: 10px; }

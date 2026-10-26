@@ -556,7 +556,7 @@ $("btnTheme").addEventListener("click", () => {
       const s = document.createElement("button");
       s.className = "swatch" + (id === "auto" ? " auto" : "") + (id === themeChoice ? " sel" : "");
       if (id !== "auto") s.dataset.theme = id;
-      const ctlFor = id === "auto" ? "Disco o regla" : CTL_NAME[CTL_BY_THEME[id]];
+      const ctlFor = id === "auto" ? "Del sistema" : CTL_NAME[CTL_BY_THEME[id]];
       s.innerHTML = `<span>${name}</span><small>${ctlFor}</small>`;
       s.onclick = () => {
         themeChoice = id; store.set("metro.theme", id); applyTheme();

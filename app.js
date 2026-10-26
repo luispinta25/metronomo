@@ -22,9 +22,11 @@ const GAIN = { 3: 1, 2: 0.6, 1: 0.32, sub: 0.16 };
 
 const saved = store.get("metro.state", {});
 const state = Object.assign({
-  bpm: 62, num: 4, den: 4, sub: 1, sound: "click", vol: 0.9, timerMin: 0, levels: [3, 2, 2, 2],
+  bpm: 62, num: 4, den: 4, sub: 1, sound: "click", vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
+  tStart: false, tStop: true, tRepeat: false,
 }, saved);
 state.levels = normalizeLevels(state.levels, state.num);
+state.timerMin = clamp(state.timerMin || 30, 1, 180);
 let songs = store.get("metro.songs", []);
 const persist = () => store.set("metro.state", state);
 
@@ -107,7 +109,7 @@ function renderAll() {
   $("ring").style.transform = `rotate(${(state.bpm * 3) % 360}deg)`;
   renderPads();
   document.querySelectorAll(".toolbar button").forEach((b) => b.classList.remove("active"));
-  if (state.timerMin > 0) $("btnTimer").classList.add("active");
+  timerRender();
   if (wakeLock) $("btnAwake").classList.add("active");
 }
 function renderPads() {
@@ -210,11 +212,6 @@ function scheduler() {
 function visLoop() {
   if (!running) return;
   while (visQueue.length && visQueue[0].t <= ctx.currentTime) flash(visQueue.shift().beat);
-  if (state.timerMin > 0) {
-    const left = state.timerMin * 60 - (performance.now() - startedAt) / 1000;
-    if (left <= 0) { stop(); return; }
-    $("status").textContent = `Temporizador: ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
-  }
   requestAnimationFrame(visLoop);
 }
 function flash(i) {
@@ -239,7 +236,8 @@ function stop() {
   if (!running) return;
   running = false;
   clearInterval(timerId);
-  if (silentEl) silentEl.pause();
+  if (run) { clearInterval(runId); run = null; }
+  if (silentEl && !tRunning) silentEl.pause();
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   $("play").classList.remove("running");
   $("play").innerHTML = '<i class="fa-solid fa-play"></i>';
@@ -329,15 +327,15 @@ const askConfirm = (title, text, okLabel = "Eliminar") =>
   sheet(title, (b) => { b.innerHTML = `<p class="note">${text}</p>`; },
     [{ label: "Cancelar", value: false }, { label: okLabel, cls: "danger", value: true }]);
 
-function stepper(label, get, set, min, max, fmt = (v) => v) {
+function stepper(label, get, set, min, max, fmt = (v) => v, step = 1) {
   const row = document.createElement("div");
   row.className = "row";
   row.innerHTML = `<label>${label}</label><div class="stepper"><button aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output></output><button aria-label="Más"><i class="fa-solid fa-plus"></i></button></div>`;
   const out = row.querySelector("output");
   const upd = () => (out.textContent = fmt(get()));
   const [m, p] = row.querySelectorAll("button");
-  m.onclick = () => { set(clamp(get() - 1, min, max)); upd(); };
-  p.onclick = () => { set(clamp(get() + 1, min, max)); upd(); };
+  m.onclick = () => { set(clamp(get() - step, min, max)); upd(); };
+  p.onclick = () => { set(clamp(get() + step, min, max)); upd(); };
   upd();
   return row;
 }
@@ -387,14 +385,98 @@ $("btnSound").addEventListener("click", () => {
     b.appendChild(chips(SUBDIVS.map((s) => [s.n, s.name]), state.sub, (v) => { state.sub = v; persist(); renderAll(); }));
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
-$("btnTimer").addEventListener("click", () => {
-  let m = state.timerMin;
-  sheet("Temporizador", (b) => {
-    b.appendChild(stepper("Detener tras (min)", () => m, (v) => (m = v), 0, 120, (v) => (v === 0 ? "Sin límite" : v)));
-  }, [{ label: "Cancelar", value: false }, { label: "Aplicar", cls: "primary", value: true }]).then((ok) => {
-    if (ok) { state.timerMin = m; persist(); renderAll(); }
+/* ---------- Temporizador ---------- */
+let tRunning = false, tPaused = false, tEnd = 0, tLeft = 0, tId = null;
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const timerSecs = () => (tPaused ? Math.ceil(tLeft / 1000) : Math.max(0, Math.ceil((tEnd - performance.now()) / 1000)));
+
+function chime() {
+  if (!ctx) return;
+  [0, 0.2, 0.4].forEach((d) => {
+    const t = ctx.currentTime + 0.05 + d, o = ctx.createOscillator(), e = ctx.createGain();
+    o.type = "sine"; o.frequency.value = 1320;
+    e.gain.setValueAtTime(0.0001, t);
+    e.gain.exponentialRampToValueAtTime(0.5, t + 0.01);
+    e.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(e); e.connect(master); o.start(t); o.stop(t + 0.2);
   });
-});
+}
+function timerRender() {
+  const b = $("btnTimer");
+  if (tRunning) {
+    b.innerHTML = `<span class="tlabel">${fmtTime(timerSecs())}</span>`;
+    b.classList.add("active");
+  } else {
+    b.innerHTML = '<i class="fa-solid fa-stopwatch"></i>';
+    b.classList.remove("active");
+  }
+  const lcd = $("timerLcd");
+  if (lcd) lcd.textContent = fmtTime(tRunning ? timerSecs() : state.timerMin * 60);
+}
+function timerTick() {
+  if (!tRunning || tPaused) return;
+  if (timerSecs() <= 0) timerFinish(); else timerRender();
+}
+function timerStart() {
+  ensureAudio();
+  tRunning = true; tPaused = false;
+  tEnd = performance.now() + state.timerMin * 60000;
+  if (state.tStart && !running) start();
+  clearInterval(tId);
+  tId = setInterval(timerTick, 250);
+  timerRender();
+}
+function timerStop() {
+  clearInterval(tId);
+  tRunning = false; tPaused = false;
+  if (!running && silentEl) silentEl.pause();
+  timerRender();
+}
+function timerFinish() {
+  chime();
+  if (state.tStop && running) stop();
+  if (state.tRepeat) {
+    tEnd = performance.now() + state.timerMin * 60000;
+    if (state.tStart && !running) start();
+    timerRender();
+  } else timerStop();
+}
+function timerSheet() {
+  const renderCtl = () => {
+    const ctl = $("tCtl"), dur = $("tDur");
+    if (!ctl) return;
+    ctl.innerHTML = "";
+    const add = (label, cls, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.className = cls; b.onclick = () => { fn(); renderCtl(); timerRender(); };
+      ctl.appendChild(b);
+    };
+    if (!tRunning) add("Iniciar", "pill go", timerStart);
+    else {
+      add(tPaused ? "Reanudar" : "Pausar", "pill go", () => {
+        if (tPaused) { tEnd = performance.now() + tLeft; tPaused = false; }
+        else { tLeft = Math.max(0, tEnd - performance.now()); tPaused = true; }
+      });
+      add("Detener", "pill stop", timerStop);
+    }
+    dur.hidden = tRunning;
+  };
+  sheet("Temporizador", (b) => {
+    b.innerHTML = '<div class="timer-lcd" id="timerLcd"></div><div class="ctl-row" id="tCtl"></div><div id="tDur"></div><div id="tOpts"></div>';
+    $("tDur").appendChild(stepper("Duración (min)", () => state.timerMin, (v) => { state.timerMin = v; persist(); timerRender(); }, 1, 180, (v) => v, 1));
+    [["tStart", "Iniciar metrónomo simultáneamente"], ["tStop", "Detener el metrónomo cuando el temporizador termine"], ["tRepeat", "Temporizador repetido"]]
+      .forEach(([k, label]) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML = `<label>${label}</label><button class="switch${state[k] ? " on" : ""}" role="switch" aria-checked="${!!state[k]}" aria-label="${label}"></button>`;
+        const sw = row.querySelector("button");
+        sw.onclick = () => { state[k] = !state[k]; sw.classList.toggle("on", state[k]); sw.setAttribute("aria-checked", state[k]); persist(); };
+        $("tOpts").appendChild(row);
+      });
+    renderCtl(); timerRender();
+  }, [{ label: "Cerrar", cls: "primary", value: true }]);
+}
+$("btnTimer").addEventListener("click", timerSheet);
 $("btnVol").addEventListener("click", () => {
   sheet("Volumen", (b) => {
     const r = document.createElement("input");
@@ -459,6 +541,110 @@ $("saveCur").addEventListener("click", () => {
     store.set("metro.songs", songs); renderSongs();
   });
 });
+
+/* ---------- Modo de práctica ---------- */
+let practices = store.get("metro.practices", null);
+if (!practices) {
+  practices = [
+    { id: 1, name: "Práctica de velocidad fija", type: "fija", from: 80, to: 120, steps: 4, min: 1, last: 0 },
+    { id: 2, name: "Práctica de velocidad progresiva", type: "progresiva", from: 75, to: 150, steps: 6, min: 6, last: 0 },
+  ];
+  store.set("metro.practices", practices);
+}
+const savePractices = () => store.set("metro.practices", practices);
+const practiceTotal = (p) => (p.type === "fija" ? p.steps * p.min : p.min) * 60;
+function practiceMeta(p) {
+  return p.type === "fija"
+    ? `${p.from} - ${p.to} BPM, ${p.steps} pasos de ${p.min} min`
+    : `${p.from} - ${p.to} BPM, ${p.min} min en total`;
+}
+function practicePlan(p, el) {
+  if (p.type === "fija") {
+    const i = Math.min(p.steps - 1, Math.floor(el / (p.min * 60)));
+    return { bpm: Math.round(p.from + ((p.to - p.from) * i) / Math.max(1, p.steps - 1)), step: i + 1 };
+  }
+  return { bpm: Math.round(p.from + (p.to - p.from) * Math.min(1, el / (p.min * 60))), step: 0 };
+}
+
+let run = null, runId = null;
+function startPractice(p) {
+  if (running) stop();
+  showView("viewMetro");
+  run = { p, t0: performance.now() };
+  start();
+  practiceTick();
+  runId = setInterval(practiceTick, 250);
+}
+function practiceTick() {
+  if (!run) return;
+  const { p } = run, el = (performance.now() - run.t0) / 1000, total = practiceTotal(p);
+  if (el >= total) {
+    p.last = Date.now(); savePractices(); renderPractices();
+    chime(); stop();
+    $("status").textContent = "Práctica completada";
+    return;
+  }
+  const { bpm, step } = practicePlan(p, el);
+  setBpm(bpm);
+  const left = fmtTime(Math.ceil(total - el));
+  $("status").textContent = (p.type === "fija" ? `Paso ${step}/${p.steps}, ` : "Progresivo, ") + `${bpm} BPM, quedan ${left}`;
+}
+
+function renderPractices() {
+  const box = $("practiceList");
+  box.innerHTML = "";
+  practices.forEach((p) => {
+    const n = p.type === "fija" ? p.steps : 6;
+    const bars = Array.from({ length: n }, (_, i) => `<span class="bar"><span style="height:${Math.round(((i + 1) / n) * 100)}%"></span></span>`).join("");
+    const last = p.last ? new Date(p.last).toLocaleDateString("es-EC", { day: "numeric", month: "short" }) : "-";
+    const card = document.createElement("div");
+    card.className = "pcard";
+    card.innerHTML = `<div class="ptop"><div class="pinfo"><div class="pname"></div><div class="pmeta"></div></div><div class="bars">${bars}</div></div>
+      <div class="pfoot"><span class="plast">Última práctica: ${last}</span><button class="pmore" aria-label="Opciones"><i class="fa-solid fa-ellipsis"></i></button><button class="pplay" aria-label="Iniciar práctica"><i class="fa-solid fa-play"></i></button></div>`;
+    card.querySelector(".pname").textContent = p.name;
+    card.querySelector(".pmeta").textContent = practiceMeta(p);
+    card.querySelector(".pplay").onclick = () => startPractice(p);
+    card.querySelector(".pmore").onclick = () => practiceMenu(p);
+    box.appendChild(card);
+  });
+  $("practiceEmpty").hidden = practices.length > 0;
+}
+async function practiceMenu(p) {
+  const r = await sheet(p.name, () => {}, [
+    { label: "Editar", value: "edit" }, { label: "Eliminar", cls: "danger", value: "del" }, { label: "Cerrar", value: null },
+  ]);
+  if (r === "edit") editPractice(p);
+  else if (r === "del" && (await askConfirm("Eliminar práctica", "Se eliminará esta práctica."))) {
+    practices = practices.filter((x) => x !== p); savePractices(); renderPractices();
+  }
+}
+function editPractice(existing) {
+  const d = Object.assign({ name: "", type: "fija", from: 80, to: 120, steps: 4, min: 1 }, existing || {});
+  let nameInp, stepsRow;
+  sheet(existing ? "Editar práctica" : "Nueva práctica", (b) => {
+    nameInp = document.createElement("input");
+    nameInp.type = "text"; nameInp.placeholder = "Nombre"; nameInp.maxLength = 40; nameInp.value = d.name;
+    b.appendChild(nameInp);
+    const l = document.createElement("div");
+    l.className = "row"; l.innerHTML = "<label>Tipo</label>";
+    b.appendChild(l);
+    b.appendChild(chips([["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => { d.type = v; stepsRow.hidden = v !== "fija"; }));
+    b.insertAdjacentHTML("beforeend", '<p class="note">Fija: sube en pasos y cada paso dura el tiempo indicado. Progresiva: sube de forma continua durante el tiempo total.</p>');
+    b.appendChild(stepper("BPM inicial", () => d.from, (v) => (d.from = v), 20, 300, (v) => v, 5));
+    b.appendChild(stepper("BPM final", () => d.to, (v) => (d.to = v), 20, 300, (v) => v, 5));
+    stepsRow = stepper("Pasos", () => d.steps, (v) => (d.steps = v), 2, 12);
+    stepsRow.hidden = d.type !== "fija";
+    b.appendChild(stepsRow);
+    b.appendChild(stepper("Minutos", () => d.min, (v) => (d.min = v), 1, 60));
+  }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
+    if (!ok) return;
+    d.name = nameInp.value.trim() || (d.type === "fija" ? "Práctica de velocidad fija" : "Práctica de velocidad progresiva");
+    if (existing) Object.assign(existing, d);
+    else practices.push(Object.assign(d, { id: Date.now(), last: 0 }));
+    savePractices(); renderPractices();
+  });
+}
+$("addPractice").addEventListener("click", () => editPractice(null));
 
 /* ---------- Clave de acceso (PIN) ---------- */
 const PIN_LEN = 4;
@@ -536,7 +722,6 @@ $("keypad").addEventListener("click", (e) => {
   drawDots();
   if (pinBuf.length === PIN_LEN) setTimeout(submitPin, 120);
 });
-$("lockNow").addEventListener("click", showLock);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) hiddenAt = Date.now();
   else if (hiddenAt && Date.now() - hiddenAt > 60000 && lockEl.hidden) showLock();
@@ -545,5 +730,6 @@ document.addEventListener("visibilitychange", () => {
 /* ---------- Arranque ---------- */
 renderAll();
 renderSongs();
+renderPractices();
 showLock();
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js?v=2").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js?v=3").catch(() => {});

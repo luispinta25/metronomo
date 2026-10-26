@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=16">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -50,6 +50,7 @@
           <span id="bpmNum">62</span><small>BPM</small>
         </button>
         <span id="tempoName" class="tname">Adagio</span>
+        <div class="trend hold tpill" id="tpill" hidden><i class="fa-solid fa-stopwatch"></i><div><b>0:00</b><small>Temporizador</small></div></div>
         <div class="trend" id="trend" hidden><i class="fa-solid fa-equals"></i><div><b></b><small></small></div></div>
       </div>
       <div class="chips-row">
@@ -67,7 +68,15 @@
       <button id="songNext" aria-label="Canción siguiente"><i class="fa-solid fa-forward-step"></i></button>
       <button id="songClose" aria-label="Cerrar"><i class="fa-solid fa-xmark"></i></button>
     </div>
-    <div class="run-graph" id="runGraph" hidden><div id="rgSvg"></div><div class="run-ctl" id="runCtl"></div></div>
+    <div class="run-graph" id="runGraph" hidden>
+      <div class="run-count">
+        <div class="rc rc-int" id="rcIntBox"><small id="rcIntLbl">Próximo cambio</small><b id="rcInt">--</b></div>
+        <div class="rc rc-tot"><small>Restante</small><b id="rcTot">--</b></div>
+      </div>
+      <div class="rc-bar"><i id="rcBar"></i></div>
+      <div id="rgSvg"></div>
+      <div class="run-ctl" id="runCtl"></div>
+    </div>
 
     <div class="dial-wrap">
 
@@ -200,6 +209,6 @@
   </div>
 </div>
 
-<script src="app.js?v=13"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

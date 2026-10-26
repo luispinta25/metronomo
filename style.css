@@ -438,3 +438,32 @@ p.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 .hero.runmode .bpm span { font-size: clamp(52px, 8dvh, 68px); }
 .trend small { white-space: nowrap; }
 .run-graph { margin-bottom: 8px; }
+
+/* ---------- Cuenta regresiva ---------- */
+.run-count { display: flex; gap: 8px; margin-bottom: 6px; }
+.rc { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 14px; background: var(--btn); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; transition: background .2s, border-color .2s; }
+.rc small { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); line-height: 1.2; }
+.rc b { font-size: 17px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--muted); }
+.rc-int { flex: 1.5; }
+.rc-int.soon { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); }
+.rc-int.soon small { color: var(--accent); }
+.rc-int.soon b { font-size: 38px; color: var(--accent); line-height: 1; }
+.rc-int.urgent { background: color-mix(in srgb, #ff9f43 20%, transparent); border-color: #ff9f43; }
+.rc-int.urgent small, .rc-int.urgent b { color: #ff9f43; }
+.rc b.tick { animation: cdPulse .45s ease-out; }
+@keyframes cdPulse { from { transform: scale(1.35); } to { transform: scale(1); } }
+.rc-tot b { font-size: 20px; color: var(--text); }
+.rc-bar { height: 4px; border-radius: 2px; background: var(--track); margin-bottom: 6px; overflow: hidden; }
+.rc-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .15s linear; }
+.tpill .fa-stopwatch { font-size: 18px; }
+.tpill b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.hero.runmode .tpill { display: none; }
+
+/* Durante una práctica, la tarjeta principal se compacta para dar espacio al panel */
+.hero.runmode { padding-bottom: 12px; }
+.hero.runmode .pads { height: clamp(52px, 7.5dvh, 72px); }
+.hero.runmode .chips-row { margin: 6px 0 8px; }
+.hero.runmode .chip { height: 32px; font-size: 13px; }
+.run-graph { padding: 6px 8px; }
+.run-ctl button { height: 34px; }
+.rc-int.soon b { font-size: 34px; }

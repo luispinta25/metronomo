@@ -663,6 +663,15 @@ function timerRender() {
   }
   const lcd = $("timerLcd");
   if (lcd) lcd.textContent = fmtTime(tRunning ? timerSecs() : state.timerMin * 60);
+  // Cuenta regresiva general: se ve en la tarjeta principal con cualquier tema o control.
+  const pill = $("tpill");
+  if (pill) {
+    pill.hidden = !tRunning || !!(typeof run !== "undefined" && run);
+    if (tRunning) {
+      pill.querySelector("b").textContent = fmtTime(timerSecs());
+      pill.querySelector("small").textContent = tPaused ? "Temporizador en pausa" : "Temporizador";
+    }
+  }
 }
 function timerTick() {
   if (!tRunning || tPaused) return;
@@ -1122,11 +1131,12 @@ function startRun(p, segs, unit) {
   run = { p, segs, unit, total: planTotal(segs), t0: unit === "time" && !state.ciOn ? performance.now() : null, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0, paused: false, pauseT: 0 };
   barHook = unit === "bars" ? runBarHook : null;
   if (unit === "time") setBpm(planAt(segs, 0).bpm);
-  $("rgSvg").innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false, unit });
+  $("rgSvg").innerHTML = graphSVG(segs, { h: 64, labels: true, axis: false, unit });
+  $("rcInt").textContent = "--"; $("rcTot").textContent = "--"; $("rcBar").style.width = "0%";
   start();
   renderRunCtl();
   practiceTick();
-  runId = setInterval(practiceTick, 250);
+  runId = setInterval(practiceTick, 120);
 }
 // Se ejecuta al inicio de cada compás dentro del programador de audio.
 function runBarHook(bar) {
@@ -1144,6 +1154,8 @@ function finishRun() {
   chime(); stop();
   runDone = desc;
   setCursor($("runGraph"), 1);
+  $("rcIntLbl").textContent = "Completada"; $("rcInt").textContent = "0"; $("rcTot").textContent = "0:00"; $("rcBar").style.width = "100%";
+  $("rcIntBox").classList.remove("soon", "urgent");
   renderRunCtl();
   $("status").textContent = "Práctica completada";
 }
@@ -1195,6 +1207,52 @@ function setTrend(el, cls, icon, title, sub) {
   el.querySelector("b").textContent = title;
   el.querySelector("small").textContent = sub;
 }
+// Datos del tramo actual: cuánto queda y si es el último.
+function countdownInfo(segs, el) {
+  let t = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const end = t + segs[i].len;
+    if (el < end || i === segs.length - 1) return { seg: segs[i], i, left: Math.max(0, end - el), isLast: i === segs.length - 1 };
+    t = end;
+  }
+  return null;
+}
+// La cuenta regresiva grande solo aparece en los últimos 10 s antes de un cambio (o del final);
+// el resto del tiempo el panel muestra información tranquila para no distraer.
+const COUNT_WINDOW = 10.4;
+function updateCountdown(el) {
+  const { segs, total, unit } = run, ci = countdownInfo(segs, el);
+  if (!ci) return;
+  const s = ci.seg, nx = segs[ci.i + 1], hold = s.from === s.to;
+  const remSec = unit === "bars" ? (ci.left * state.num * 60) / Math.max(20, state.bpm) : ci.left;
+  const inWindow = remSec <= COUNT_WINDOW;
+  let lbl, val, soon = false;
+  if (inWindow && (hold || ci.isLast)) {
+    soon = true;
+    val = String(unit === "bars" ? Math.max(1, Math.round(ci.left * state.num)) : Math.max(1, Math.ceil(remSec - 1e-6)));
+    if (ci.isLast) lbl = "Termina en";
+    else if (nx.from !== nx.to) lbl = nx.to > s.to ? "Empezamos a subir en" : "Empezamos a bajar en";
+    else lbl = `Cambia a ${nx.to} BPM en`;
+    if (unit === "bars") lbl += " (tiempos)";
+  } else if (!hold) {
+    lbl = "Llegando a"; val = `${s.to} BPM`;
+  } else if (ci.isLast) {
+    lbl = "Último tramo"; val = `${s.to} BPM`;
+  } else {
+    lbl = nx.to > s.to ? "Después: subir a" : nx.to < s.to ? "Después: bajar a" : "Después: seguir en";
+    val = `${nx.to} BPM`;
+  }
+  const box = $("rcIntBox"), num = $("rcInt");
+  $("rcIntLbl").textContent = lbl;
+  if (num.textContent !== val) {
+    num.textContent = val;
+    if (soon) { num.classList.remove("tick"); void num.offsetWidth; num.classList.add("tick"); }
+  }
+  box.classList.toggle("soon", soon);
+  box.classList.toggle("urgent", soon && Number(val) <= 3);
+  $("rcTot").textContent = unit === "bars" ? `${Math.max(0, Math.ceil(total - el))} comp.` : fmtTime(Math.max(0, Math.ceil(total - el)));
+  $("rcBar").style.width = `${clamp(el / total, 0, 1) * 100}%`;
+}
 function practiceTick() {
   if (!run || run.paused) return;
   const { segs, total, unit } = run;
@@ -1210,9 +1268,9 @@ function practiceTick() {
     setBpm(planAt(segs, el).bpm);
   }
   const { idx, count } = planAt(segs, el), seg = segs[idx - 1];
-  const left = unit === "bars" ? `${Math.max(0, total - Math.floor(el))} comp.` : fmtTime(Math.ceil(total - el));
   const label = seg && seg.meta && seg.meta.name ? seg.meta.name : seg && seg.iv ? `Intervalo ${seg.iv}/${seg.n}` : count > 1 ? `Tramo ${idx}/${count}` : "Gradual";
-  $("status").textContent = `${label}, quedan ${left}`;
+  $("status").textContent = label;
+  updateCountdown(el);
   updateTrend(trendOf(segs, el));
   setCursor($("runGraph"), el / total);
   setCursor(document.querySelector(`.pcard[data-id="${run.p.id}"]`), el / total);
@@ -1222,6 +1280,7 @@ function renderRunCtl() {
   const box = $("runGraph"), ctl = $("runCtl"), cur = run || runDone;
   box.hidden = !cur;
   $("viewMetro").querySelector(".hero").classList.toggle("runmode", !!run);
+  timerRender();
   ctl.innerHTML = "";
   if (!cur) { updateTrend(); return; }
   const add = (icon, label, fn, cls) => {

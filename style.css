@@ -315,3 +315,31 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .swatch.sel { border-color: var(--accent); }
 .swatch.auto span, .swatch.auto small { white-space: nowrap; width: fit-content; }
 .swatch.auto small { font-size: 10px; }
+
+/* ---------- Gráfico de curva y editor de intervalos ---------- */
+.g { width: 100%; height: auto; display: block; overflow: visible; }
+.g text { font: 600 10px -apple-system, sans-serif; fill: var(--muted); }
+.g text.lbl { fill: var(--text); font-size: 11px; }
+.g .grid { stroke: var(--track); stroke-width: 1; }
+.g .pin { fill: var(--accent); stroke: var(--bg1); stroke-width: 1.5; }
+.g .gcur { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.pg { width: 46%; max-width: 170px; align-self: center; }
+.run-graph { margin: 4px 2px 0; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+.pgraph-edit { margin: 12px 0 4px; padding: 10px 10px 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+.pgraph-edit .note { text-align: center; margin: 2px 0 6px; }
+
+.iv { margin: 10px 0; padding: 12px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); }
+.iv-top { display: flex; align-items: center; gap: 10px; }
+.iv-n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: var(--accent); color: var(--on-accent); }
+.iv-f { flex: 1; min-width: 0; }
+.iv-f label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; margin-bottom: 4px; }
+.mst { display: flex; align-items: center; gap: 4px; }
+.mst button { flex: none; width: 34px; height: 38px; border-radius: 11px; background: var(--btn); border: 1px solid var(--btn-border); font-size: 13px; }
+.mst button:active { background: var(--btn-press); }
+.mst output, .mst .iv-in { flex: 1; min-width: 0; text-align: center; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sheet .iv-in { width: 100%; height: 38px; padding: 0 2px; font-size: 18px; border-radius: 10px; }
+.iv-bot { display: flex; gap: 6px; margin-top: 10px; }
+.iv-bot button { flex: 1; height: 38px; border-radius: 11px; background: var(--btn); border: 1px solid var(--btn-border); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.iv-bot button:active { background: var(--btn-press); }
+.iv-bot button.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+button:disabled { opacity: .4; cursor: not-allowed; }

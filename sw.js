@@ -1,4 +1,4 @@
-const CACHE = "metronomo-v8";
+const CACHE = "metronomo-v9";
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "manifest.webmanifest",
   "vendor/css/fontawesome.min.css", "vendor/css/solid.min.css", "vendor/webfonts/fa-solid-900.woff2",

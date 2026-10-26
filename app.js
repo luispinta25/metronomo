@@ -334,6 +334,7 @@ function stop() {
   document.querySelectorAll("#polyDots .on").forEach((c) => c.classList.remove("on"));
   document.querySelectorAll("#orbDots .on").forEach((c) => c.classList.remove("on"));
   setPlayUI(false);
+  clearPracticeUI();
   $("status").innerHTML = "&nbsp;";
 }
 
@@ -714,56 +715,152 @@ if (!practices) {
   practices = [
     { id: 1, name: "Práctica de velocidad fija", type: "fija", from: 80, to: 120, steps: 4, min: 1, last: 0 },
     { id: 2, name: "Práctica de velocidad progresiva", type: "progresiva", from: 75, to: 150, steps: 6, min: 6, last: 0 },
+    { id: 3, name: "Intervalos 120, 100, 140", type: "custom", last: 0,
+      intervals: [{ bpm: 120, sec: 60, ramp: false }, { bpm: 100, sec: 60, ramp: false }, { bpm: 140, sec: 60, ramp: false }] },
   ];
   store.set("metro.practices", practices);
 }
 const savePractices = () => store.set("metro.practices", practices);
-const practiceTotal = (p) => (p.type === "fija" ? p.steps * p.min : p.min) * 60;
-function practiceMeta(p) {
-  return p.type === "fija"
-    ? `${p.from} - ${p.to} BPM, ${p.steps} pasos de ${p.min} min`
-    : `${p.from} - ${p.to} BPM, ${p.min} min en total`;
-}
-function practicePlan(p, el) {
-  if (p.type === "fija") {
-    const i = Math.min(p.steps - 1, Math.floor(el / (p.min * 60)));
-    return { bpm: Math.round(p.from + ((p.to - p.from) * i) / Math.max(1, p.steps - 1)), step: i + 1 };
+
+// Toda práctica se reduce a tramos {from, to, sec}: constante si from == to, gradual si no.
+function compileSegs(p) {
+  if (p.type === "custom") {
+    const iv = p.intervals || [];
+    return iv.map((x, i) => ({ from: x.ramp && i > 0 ? iv[i - 1].bpm : x.bpm, to: x.bpm, sec: x.sec }));
   }
-  return { bpm: Math.round(p.from + (p.to - p.from) * Math.min(1, el / (p.min * 60))), step: 0 };
+  if (p.type === "fija") {
+    return Array.from({ length: p.steps }, (_, i) => {
+      const b = Math.round(p.from + ((p.to - p.from) * i) / Math.max(1, p.steps - 1));
+      return { from: b, to: b, sec: p.min * 60 };
+    });
+  }
+  return [{ from: p.from, to: p.to, sec: p.min * 60 }];
 }
+const planTotal = (segs) => segs.reduce((a, s) => a + s.sec, 0);
+function planAt(segs, el) {
+  let t = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    if (el < t + s.sec || i === segs.length - 1) {
+      const f = s.sec ? clamp((el - t) / s.sec, 0, 1) : 1;
+      return { bpm: Math.round(s.from + (s.to - s.from) * f), idx: i + 1, count: segs.length };
+    }
+    t += s.sec;
+  }
+  return { bpm: state.bpm, idx: 0, count: 0 };
+}
+function practiceMeta(p) {
+  const segs = compileSegs(p), all = segs.flatMap((s) => [s.from, s.to]);
+  const lo = Math.min(...all), hi = Math.max(...all), tot = fmtTime(planTotal(segs));
+  if (p.type === "custom") return `${segs.length} ${segs.length === 1 ? "intervalo" : "intervalos"}, ${lo} - ${hi} BPM, ${tot}`;
+  if (p.type === "fija") return `${p.from} - ${p.to} BPM, ${p.steps} pasos de ${p.min} min`;
+  return `${p.from} - ${p.to} BPM, ${p.min} min en total`;
+}
+
+/* Gráfico de curva del tempo en el tiempo */
+let graphN = 0;
+function graphSVG(segs, { h = 120, labels = true, axis = true } = {}) {
+  const W = 320, L = axis ? 30 : 6, R = 8, T = labels ? 26 : 8, B = axis ? 18 : 6;
+  const total = planTotal(segs) || 1;
+  const vals = segs.flatMap((s) => [s.from, s.to]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 20) { const m = (hi + lo) / 2; lo = m - 10; hi = m + 10; }
+  const pad = (hi - lo) * 0.18; lo -= pad; hi += pad;
+  const X = (t) => L + ((W - L - R) * t) / total;
+  const Y = (b) => T + (h - T - B) * (1 - (b - lo) / (hi - lo));
+  const raw = (t) => {
+    let a = 0;
+    for (const s of segs) { if (t <= a + s.sec) return s.from + (s.to - s.from) * (s.sec ? (t - a) / s.sec : 1); a += s.sec; }
+    return segs[segs.length - 1].to;
+  };
+  // Se suavizan las transiciones para que la línea se lea como una curva.
+  const wd = Math.min(total * 0.06, 10), n = 200, taps = 16, pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = (total * i) / n;
+    let sum = 0, wsum = 0;
+    for (let k = -taps; k <= taps; k++) {
+      const wgt = 1 - Math.abs(k) / (taps + 1); // ventana triangular: bordes redondeados
+      sum += wgt * raw(clamp(t + (wd * k) / taps, 0, total)); wsum += wgt;
+    }
+    pts.push([X(t), Y(sum / wsum)]);
+  }
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const id = ++graphN, base = h - B;
+  let s = `<svg class="g" viewBox="0 0 ${W} ${h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Curva de tempo">` +
+    `<defs><linearGradient id="lg${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--accent2)"/><stop offset="1" style="stop-color:var(--accent)"/></linearGradient>` +
+    `<linearGradient id="ag${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" style="stop-color:var(--accent);stop-opacity:.35"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>`;
+  if (axis) {
+    const top = Math.round(hi - pad), bot = Math.round(lo + pad), mid = Math.round((top + bot) / 2);
+    [top, mid, bot].forEach((v) => { s += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text x="${L - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${v}</text>`; });
+    s += `<text x="${L}" y="${h - 4}" text-anchor="start">0:00</text><text x="${W - R}" y="${h - 4}" text-anchor="end">${fmtTime(Math.round(total))}</text>`;
+  }
+  s += `<path d="${d} L${X(total).toFixed(1)} ${base} L${L} ${base} Z" fill="url(#ag${id})"/>` +
+    `<path d="${d}" fill="none" stroke="url(#lg${id})" stroke-width="${axis ? 3.2 : 4.6}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (labels) {
+    let a = 0;
+    const step = segs.length > 14 ? 3 : segs.length > 8 ? 2 : 1;
+    segs.forEach((sg, i) => {
+      const tm = a + sg.sec / 2; a += sg.sec;
+      const x = X(tm), y = Y(raw(tm));
+      s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" class="pin"/>`;
+      if (i % step === 0) s += `<text class="lbl" x="${x.toFixed(1)}" y="${(y - 9).toFixed(1)}" text-anchor="middle">${Math.round(sg.to)}</text>`;
+    });
+  }
+  s += `<line class="gcur" x1="${L}" x2="${L}" y1="${T - 6}" y2="${base}" data-l="${L}" data-w="${W - L - R}" style="opacity:0"/></svg>`;
+  return s;
+}
+function setCursor(root, frac) {
+  if (!root) return;
+  const c = root.querySelector(".gcur");
+  if (!c) return;
+  const x = +c.dataset.l + +c.dataset.w * clamp(frac, 0, 1);
+  c.setAttribute("x1", x); c.setAttribute("x2", x);
+  c.style.opacity = 1;
+}
+
 let run = null, runId = null;
 function startPractice(p) {
   if (running) stop();
   showView("viewMetro");
-  run = { p, t0: performance.now() };
+  const segs = compileSegs(p);
+  run = { p, segs, total: planTotal(segs), t0: performance.now() };
+  const rg = $("runGraph");
+  rg.innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false });
+  rg.hidden = false;
   start();
   practiceTick();
   runId = setInterval(practiceTick, 250);
 }
 function practiceTick() {
   if (!run) return;
-  const { p } = run, el = (performance.now() - run.t0) / 1000, total = practiceTotal(p);
+  const { p, segs, total } = run, el = (performance.now() - run.t0) / 1000;
   if (el >= total) {
     p.last = Date.now(); savePractices(); renderPractices();
     chime(); stop();
     $("status").textContent = "Práctica completada";
     return;
   }
-  const { bpm, step } = practicePlan(p, el);
+  const { bpm, idx, count } = planAt(segs, el);
   setBpm(bpm);
   const left = fmtTime(Math.ceil(total - el));
-  $("status").textContent = (p.type === "fija" ? `Paso ${step}/${p.steps}, ` : "Progresivo, ") + `${bpm} BPM, quedan ${left}`;
+  $("status").textContent = (count > 1 ? `Intervalo ${idx}/${count}, ` : "Gradual, ") + `${bpm} BPM, quedan ${left}`;
+  setCursor($("runGraph"), el / total);
+  setCursor(document.querySelector(`.pcard[data-id="${p.id}"]`), el / total);
 }
+function clearPracticeUI() {
+  $("runGraph").hidden = true;
+  document.querySelectorAll(".gcur").forEach((c) => { c.style.opacity = 0; });
+}
+
 function renderPractices() {
   const box = $("practiceList");
   box.innerHTML = "";
   practices.forEach((p) => {
-    const n = p.type === "fija" ? p.steps : 6;
-    const bars = Array.from({ length: n }, (_, i) => `<span class="bar"><span style="height:${Math.round(((i + 1) / n) * 100)}%"></span></span>`).join("");
     const last = p.last ? new Date(p.last).toLocaleDateString("es-EC", { day: "numeric", month: "short" }) : "-";
     const card = document.createElement("div");
     card.className = "pcard";
-    card.innerHTML = `<div class="ptop"><div class="pinfo"><div class="pname"></div><div class="pmeta"></div></div><div class="bars">${bars}</div></div>
+    card.dataset.id = p.id;
+    card.innerHTML = `<div class="ptop"><div class="pinfo"><div class="pname"></div><div class="pmeta"></div></div><div class="pg">${graphSVG(compileSegs(p), { h: 100, labels: false, axis: false })}</div></div>
       <div class="pfoot"><span class="plast">Última práctica: ${last}</span><button class="pmore" aria-label="Opciones"><i class="fa-solid fa-ellipsis"></i></button><button class="pplay" aria-label="Iniciar práctica"><i class="fa-solid fa-play"></i></button></div>`;
     card.querySelector(".pname").textContent = p.name;
     card.querySelector(".pmeta").textContent = practiceMeta(p);
@@ -774,7 +871,7 @@ function renderPractices() {
   $("practiceEmpty").hidden = practices.length > 0;
 }
 async function practiceMenu(p) {
-  const r = await sheet(p.name, () => {}, [
+  const r = await sheet(p.name, (b) => { b.innerHTML = `<div class="pgraph-edit">${graphSVG(compileSegs(p), { h: 130 })}</div><p class="note">${practiceMeta(p)}</p>`; }, [
     { label: "Editar", value: "edit" }, { label: "Eliminar", cls: "danger", value: "del" }, { label: "Cerrar", value: null },
   ]);
   if (r === "edit") editPractice(p);
@@ -782,25 +879,77 @@ async function practiceMenu(p) {
     practices = practices.filter((x) => x !== p); savePractices(); renderPractices();
   }
 }
+
+const SEED_IV = [{ bpm: 120, sec: 60, ramp: false }, { bpm: 100, sec: 60, ramp: false }, { bpm: 140, sec: 60, ramp: false }];
 function editPractice(existing) {
-  const d = Object.assign({ name: "", type: "fija", from: 80, to: 120, steps: 4, min: 1 }, existing || {});
-  let nameInp, stepsRow;
+  const d = JSON.parse(JSON.stringify(Object.assign(
+    { name: "", type: "custom", from: 80, to: 120, steps: 4, min: 1, intervals: SEED_IV }, existing || {})));
+  let nameInp, gbox, dyn;
+  const updateGraph = () => {
+    const segs = compileSegs(d);
+    gbox.innerHTML = graphSVG(segs, { h: 150 }) +
+      `<p class="note">Total ${fmtTime(planTotal(segs))}${d.type === "custom" ? `, ${d.intervals.length} intervalos` : ""}</p>`;
+  };
+  const renderBody = () => {
+    dyn.innerHTML = "";
+    if (d.type === "custom") {
+      d.intervals.forEach((iv, i) => dyn.appendChild(ivRow(i)));
+      const add = document.createElement("button");
+      add.className = "btn-wide"; add.innerHTML = '<i class="fa-solid fa-plus"></i> Añadir intervalo';
+      add.disabled = d.intervals.length >= 20;
+      add.onclick = () => { const l = d.intervals[d.intervals.length - 1]; d.intervals.push({ bpm: l.bpm, sec: l.sec, ramp: false }); renderBody(); };
+      dyn.appendChild(add);
+    } else {
+      dyn.appendChild(stepper("BPM inicial", () => d.from, (v) => { d.from = v; updateGraph(); }, 20, 300, (v) => v, 5));
+      dyn.appendChild(stepper("BPM final", () => d.to, (v) => { d.to = v; updateGraph(); }, 20, 300, (v) => v, 5));
+      if (d.type === "fija") dyn.appendChild(stepper("Pasos", () => d.steps, (v) => { d.steps = v; updateGraph(); }, 2, 12));
+      dyn.appendChild(stepper(d.type === "fija" ? "Minutos por paso" : "Minutos en total", () => d.min, (v) => { d.min = v; updateGraph(); }, 1, 60));
+    }
+    updateGraph();
+  };
+  const ivRow = (i) => {
+    const iv = d.intervals[i], row = document.createElement("div");
+    row.className = "iv";
+    row.innerHTML = `<div class="iv-top"><span class="iv-n">${i + 1}</span>
+      <div class="iv-f"><label>BPM</label><div class="mst"><button data-a="bm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" type="tel" inputmode="numeric" maxlength="3" value="${iv.bpm}"><button data-a="bp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>
+      <div class="iv-f"><label>Duración</label><div class="mst"><button data-a="dm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output>${fmtTime(iv.sec)}</output><button data-a="dp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div></div>
+      <div class="iv-bot"><button class="ivtog${iv.ramp && i ? " on" : ""}" data-a="tog"${i === 0 ? " disabled" : ""}><i class="fa-solid fa-chart-line"></i> Gradual</button>
+      <button data-a="dup"><i class="fa-solid fa-copy"></i> Duplicar</button>
+      <button data-a="del"${d.intervals.length === 1 ? " disabled" : ""}><i class="fa-solid fa-trash"></i> Quitar</button></div>`;
+    const inp = row.querySelector("input"), out = row.querySelector("output");
+    inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= 20 && v <= 300) { iv.bpm = v; updateGraph(); } });
+    inp.addEventListener("change", () => { iv.bpm = clamp(parseInt(inp.value, 10) || iv.bpm, 20, 300); inp.value = iv.bpm; updateGraph(); });
+    row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+      const a = b.dataset.a;
+      if (a === "bm" || a === "bp") { iv.bpm = clamp(iv.bpm + (a === "bp" ? 5 : -5), 20, 300); inp.value = iv.bpm; updateGraph(); }
+      else if (a === "dm" || a === "dp") { iv.sec = clamp(iv.sec + (a === "dp" ? 15 : -15), 15, 1800); out.textContent = fmtTime(iv.sec); updateGraph(); }
+      else if (a === "tog") { iv.ramp = !iv.ramp; b.classList.toggle("on", iv.ramp); updateGraph(); }
+      else if (a === "dup") { d.intervals.splice(i + 1, 0, { ...iv }); renderBody(); }
+      else if (a === "del" && d.intervals.length > 1) { d.intervals.splice(i, 1); renderBody(); }
+    }));
+    return row;
+  };
   sheet(existing ? "Editar práctica" : "Nueva práctica", (b) => {
     nameInp = document.createElement("input");
     nameInp.type = "text"; nameInp.placeholder = "Nombre"; nameInp.maxLength = 40; nameInp.value = d.name;
     b.appendChild(nameInp);
+    gbox = document.createElement("div"); gbox.className = "pgraph-edit";
+    b.appendChild(gbox);
     b.appendChild(h3("Tipo"));
-    b.appendChild(chips([["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => { d.type = v; stepsRow.hidden = v !== "fija"; }));
-    b.insertAdjacentHTML("beforeend", '<p class="note">Fija: sube en pasos y cada paso dura el tiempo indicado. Progresiva: sube de forma continua durante el tiempo total.</p>');
-    b.appendChild(stepper("BPM inicial", () => d.from, (v) => (d.from = v), 20, 300, (v) => v, 5));
-    b.appendChild(stepper("BPM final", () => d.to, (v) => (d.to = v), 20, 300, (v) => v, 5));
-    stepsRow = stepper("Pasos", () => d.steps, (v) => (d.steps = v), 2, 12);
-    stepsRow.hidden = d.type !== "fija";
-    b.appendChild(stepsRow);
-    b.appendChild(stepper("Minutos", () => d.min, (v) => (d.min = v), 1, 60));
+    b.appendChild(chips([["custom", "Personalizada"], ["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => {
+      if (v === "custom" && d.type !== "custom") {
+        d.intervals = compileSegs(d).flatMap((s, i) => (s.from === s.to ? [{ bpm: s.to, sec: s.sec, ramp: false }]
+          : [{ bpm: s.from, sec: 15, ramp: false }, { bpm: s.to, sec: Math.max(15, s.sec - 15), ramp: true }])).slice(0, 20);
+      }
+      d.type = v; renderBody();
+    }));
+    dyn = document.createElement("div");
+    b.appendChild(dyn);
+    b.insertAdjacentHTML("beforeend", '<p class="note">Personalizada: define cada intervalo con su BPM y duración. "Gradual" sube o baja suavemente desde el intervalo anterior. Fija: sube en pasos. Progresiva: sube de forma continua.</p>');
+    renderBody();
   }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
     if (!ok) return;
-    d.name = nameInp.value.trim() || (d.type === "fija" ? "Práctica de velocidad fija" : "Práctica de velocidad progresiva");
+    d.name = nameInp.value.trim() || (d.type === "custom" ? "Práctica personalizada" : d.type === "fija" ? "Práctica de velocidad fija" : "Práctica de velocidad progresiva");
     if (existing) Object.assign(existing, d);
     else practices.push(Object.assign(d, { id: Date.now(), last: 0 }));
     savePractices(); renderPractices();

@@ -58,12 +58,12 @@ const GROUPS = {
   16: [[4, 4, 4, 4], [3, 3, 3, 3, 4]],
 };
 const groupLevels = (g) => g.flatMap((len, gi) => Array.from({ length: len }, (_, i) => (i === 0 ? (gi === 0 ? 3 : 2) : 1)));
-const GAIN = { 3: 1, 2: 0.6, 1: 0.32, sub: 0.16 };
+const GAIN = { 3: 1, 2: 0.6, 1: 0.32, sub: 0.3 };
 
 /* ---------- Estado ---------- */
 const saved = store.get("metro.state", {});
 const state = Object.assign({
-  bpm: 62, num: 4, den: 4, pat: "negra", sound: "click", vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
+  bpm: 62, num: 4, den: 4, pat: "negra", sound: "click", sound2: null, vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
   tStart: false, tStop: true, tRepeat: false, polyOn: false, polyN: 3, group: null,
 }, saved);
 if (saved.sub && !saved.pat) state.pat = OLD_SUB[saved.sub] || "negra";
@@ -248,7 +248,9 @@ function noiseBurst(time, gain, dur, ftype, freq, q) {
 }
 function click(time, level) {
   const idx = level === 3 ? 0 : level === 2 ? 1 : 2;
-  (SOUNDS[state.sound] || SOUNDS.click).play(time, idx, GAIN[level] || 0.4);
+  // Las subdivisiones usan el timbre secundario si se eligió uno; si no, el principal.
+  const id = level === "sub" ? (state.sound2 || state.sound) : state.sound;
+  (SOUNDS[id] || SOUNDS.click).play(time, idx, GAIN[level] || 0.4);
 }
 function polyClick(time, first) {
   tone(time, "sine", first ? 1760 : 1320, first ? 0.55 : 0.38, 0.09);
@@ -518,14 +520,20 @@ $("tempoBtn").addEventListener("click", openTempoInput);
 
 /* ---------- Sonido, volumen, pantalla y tema ---------- */
 $("btnSound").addEventListener("click", () => {
+  // Vista previa que mezcla ambos timbres: pulso, subdivisión, pulso, subdivisión.
+  const preview = () => {
+    ensureAudio();
+    const t = ctx.currentTime + 0.03;
+    click(t, 3); click(t + 0.25, "sub"); click(t + 0.5, 2); click(t + 0.75, "sub");
+    setTimeout(() => { if (!running && !tRunning && silentEl) silentEl.pause(); }, 1400);
+  };
+  const names = Object.entries(SOUNDS).map(([k, v]) => [k, v.name]);
   sheet("Sonido", (b) => {
-    b.appendChild(chips(Object.entries(SOUNDS).map(([k, v]) => [k, v.name]), state.sound, (v) => {
-      state.sound = v; persist();
-      ensureAudio();
-      click(ctx.currentTime + 0.02, 3);
-      click(ctx.currentTime + 0.42, 2);
-      setTimeout(() => { if (!running && !tRunning && silentEl) silentEl.pause(); }, 900);
-    }));
+    b.appendChild(h3("Principal (pulsos)"));
+    b.appendChild(chips(names, state.sound, (v) => { state.sound = v; persist(); preview(); }));
+    b.appendChild(h3("Secundario (subdivisiones)"));
+    b.appendChild(chips([["", "Igual al principal"], ...names], state.sound2 || "", (v) => { state.sound2 = v || null; persist(); preview(); }));
+    b.insertAdjacentHTML("beforeend", '<p class="note">El secundario suena en las subdivisiones de cada pulso. Elige una subdivisión distinta de Negra para oírlo.</p>');
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
 $("btnVol").addEventListener("click", () => {
@@ -673,6 +681,7 @@ function renderSongs() {
       Object.assign(state, {
         bpm: s.bpm, num: s.num, den: s.den, pat: songPat(s), levels: normalizeLevels(s.levels, s.num),
         polyOn: !!s.polyOn, polyN: s.polyN || 3, group: null,
+        ...(s.sound && SOUNDS[s.sound] ? { sound: s.sound, sound2: SOUNDS[s.sound2] ? s.sound2 : null } : {}),
       });
       persist(); renderAll(); showView("viewMetro");
     };
@@ -694,7 +703,7 @@ $("saveCur").addEventListener("click", () => {
   }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
     const name = inp.value.trim();
     if (!ok || !name) return;
-    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, pat: state.pat, levels: [...state.levels], polyOn: state.polyOn, polyN: state.polyN });
+    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, pat: state.pat, levels: [...state.levels], polyOn: state.polyOn, polyN: state.polyN, sound: state.sound, sound2: state.sound2 });
     store.set("metro.songs", songs); renderSongs();
   });
 });

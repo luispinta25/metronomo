@@ -97,7 +97,7 @@ function applyTheme() {
 const CTL_BY_THEME = { medianoche: "disco", claro: "regla", grafito: "pend", aurora: "orbe", ambar: "pend", carmesi: "orbe" };
 const CTLS = [["tema", "Según el tema"], ["disco", "Disco"], ["pend", "Péndulo"], ["orbe", "Orbe"], ["regla", "Regla"]];
 const CTL_NAME = { disco: "Disco", pend: "Péndulo", orbe: "Orbe", regla: "Regla" };
-let ctlChoice = store.get("metro.ctl", "tema");
+let ctlChoice = store.get("metro.ctl", "regla");
 function applyCtl() {
   const id = ctlChoice === "tema" ? (CTL_BY_THEME[document.documentElement.dataset.theme] || "disco") : ctlChoice;
   document.documentElement.dataset.ctl = id;
@@ -809,7 +809,7 @@ function renderOrbDots() {
 (function setupOrb() {
   const orb = $("orb");
   let y0 = 0, bpm0 = 0, moved = 0, active = false;
-  orb.addEventListener("pointerdown", (e) => { active = true; y0 = e.clientY; bpm0 = state.bpm; moved = 0; orb.setPointerCapture(e.pointerId); });
+  orb.addEventListener("pointerdown", (e) => { if (e.target.closest("button")) return; active = true; y0 = e.clientY; bpm0 = state.bpm; moved = 0; orb.setPointerCapture(e.pointerId); });
   orb.addEventListener("pointermove", (e) => {
     if (!active) return;
     moved = Math.max(moved, Math.abs(e.clientY - y0));

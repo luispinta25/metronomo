@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -23,7 +23,7 @@
     var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     var t = c === "auto" ? (dark ? "medianoche" : "claro") : c;
     document.documentElement.dataset.theme = t;
-    var k = JSON.parse(localStorage.getItem("metro.ctl") || '"tema"');
+    var k = JSON.parse(localStorage.getItem("metro.ctl") || '"regla"');
     var def = { medianoche: "disco", claro: "regla", grafito: "pend", aurora: "orbe", ambar: "pend", carmesi: "orbe" };
     document.documentElement.dataset.ctl = k === "tema" ? (def[t] || "disco") : k;
   } catch (e) { document.documentElement.dataset.ctl = "disco"; }
@@ -100,6 +100,8 @@
           <small>BPM</small>
           <i class="fa-solid fa-play" id="orbIco"></i>
         </div>
+        <button class="mini orb-btn left js-minus" aria-label="Bajar tempo"><i class="fa-solid fa-minus"></i></button>
+        <button class="mini orb-btn right js-plus" aria-label="Subir tempo"><i class="fa-solid fa-plus"></i></button>
         <p class="hint">Desliza arriba o abajo. Toca para iniciar</p>
       </div>
 
@@ -161,6 +163,6 @@
   </div>
 </div>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

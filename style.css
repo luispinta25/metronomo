@@ -284,3 +284,7 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 /* Temas: etiqueta del control */
 .swatch { flex-direction: column; justify-content: flex-end; align-items: flex-start; }
 .swatch small { display: block; font-weight: 500; opacity: .75; font-size: 11px; margin-top: 1px; }
+
+/* Orbe: botones de ajuste fino */
+.orb-btn { position: absolute; bottom: 14px; width: 56px; height: 56px; font-size: 18px; z-index: 2; }
+.orb-btn.left { left: 0; } .orb-btn.right { right: 0; }

@@ -1,136 +1,110 @@
 <!doctype html>
 <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Metrónomo</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <main class="app-shell">
-      <section class="metronome-panel" aria-label="Metrónomo">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Web metronome</p>
-            <h1>Metrónomo</h1>
-          </div>
-          <div class="status-pill" id="statusText">Listo</div>
-        </header>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1a1238">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Metrónomo">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/css/fontawesome.min.css">
+<link rel="stylesheet" href="vendor/css/solid.min.css">
+<link rel="stylesheet" href="style.css">
+<title>Metrónomo</title>
+</head>
+<body>
 
-        <div class="workbench">
-          <section class="tempo-zone" aria-label="Tempo actual">
-            <section class="tempo-stage">
-              <button class="icon-button" id="decreaseTempo" type="button" aria-label="Bajar tempo">
-                <span aria-hidden="true">−</span>
-              </button>
+<div class="lock" id="lock" hidden>
+  <div class="lock-card">
+    <i class="fa-solid fa-lock lock-ico"></i>
+    <h1 id="lockTitle">Ingresa tu clave</h1>
+    <p id="lockHint" class="lock-hint"></p>
+    <div class="dots" id="lockDots"></div>
+    <div class="keypad" id="keypad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <span></span><button data-k="0">0</button>
+      <button data-k="del" aria-label="Borrar"><i class="fa-solid fa-delete-left"></i></button>
+    </div>
+  </div>
+</div>
 
-              <div class="tempo-display">
-                <div class="pulse-ring" id="pulseRing">
-                  <div class="pendulum">
-                    <div class="pendulum-arm" id="pendulumArm"></div>
-                    <div class="pendulum-dot" id="pendulumDot"></div>
-                  </div>
-                </div>
-                <label for="tempoInput">BPM</label>
-                <input id="tempoInput" type="text" pattern="[0-9]*" value="100" inputmode="numeric" />
-              </div>
+<div class="app" id="app" hidden>
 
-              <button class="icon-button" id="increaseTempo" type="button" aria-label="Subir tempo">
-                <span aria-hidden="true">+</span>
-              </button>
-            </section>
+  <main id="viewMetro" class="view active">
+    <section class="lcd">
+      <div class="lcd-head">
+        <span class="tag tag-tempo">TEMPO (BPM)</span>
+        <span class="tag tag-sig">Compás</span>
+        <span class="tag tag-sub">Subdiv.</span>
+      </div>
+      <div class="lcd-row">
+        <button class="lcd-tempo" id="tempoBtn" aria-label="Cambiar tempo">
+          <span id="beatUnit" class="note-ico"></span>
+          <span id="tempoDigits" class="seg"></span>
+          <span id="tempoName" class="tempo-name">Adagio</span>
+        </button>
+        <button class="lcd-sig" id="sigDisplay" aria-label="Compás">
+          <span id="sigDigits" class="seg"></span>
+        </button>
+        <button class="lcd-sub" id="subBtn" aria-label="Subdivisión">
+          <span id="subIco" class="note-ico"></span>
+        </button>
+      </div>
+      <div class="pads" id="pads"></div>
+    </section>
 
-            <input class="tempo-slider" id="tempoSlider" type="range" min="30" max="240" value="100" />
+    <div class="toolbar">
+      <button id="btnSound" aria-label="Sonido"><i class="fa-solid fa-screwdriver-wrench"></i></button>
+      <button id="btnTimer" aria-label="Temporizador"><i class="fa-solid fa-stopwatch"></i></button>
+      <button id="btnVol" aria-label="Volumen"><i class="fa-solid fa-volume-high"></i></button>
+      <button id="btnAwake" aria-label="Pantalla encendida"><i class="fa-solid fa-mobile-screen"></i></button>
+    </div>
+    <div class="status" id="status">&nbsp;</div>
 
-            <div class="primary-controls">
-              <button class="tap-button" id="tapTempo" type="button">Tap</button>
-              <button class="play-button" id="togglePlayback" type="button" aria-pressed="false">
-                <span id="playIcon" aria-hidden="true">▶</span>
-                <span id="playLabel">Iniciar</span>
-              </button>
-            </div>
+    <div class="dial-wrap">
+      <div class="dial" id="dial">
+        <div class="ring" id="ring"></div>
+        <div class="face"></div>
+        <button class="arrow left" id="minus" aria-label="Bajar tempo"><i class="fa-solid fa-chevron-left"></i></button>
+        <button class="arrow right" id="plus" aria-label="Subir tempo"><i class="fa-solid fa-chevron-right"></i></button>
+        <button class="play" id="play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
+      </div>
+    </div>
 
-            <section class="beat-row" id="beatRow" aria-label="Pulso visual"></section>
-          </section>
+    <div class="bottom-btns">
+      <button class="big" id="sigBtn">4/4</button>
+      <button class="big" id="tapBtn">TAP</button>
+    </div>
+  </main>
 
-          <section class="controls-zone" aria-label="Ajustes">
-            <label class="control-card">
-              <span>Compás</span>
-              <select id="beatsPerMeasure">
-                <option value="2">2/4</option>
-                <option value="3">3/4</option>
-                <option value="4" selected>4/4</option>
-                <option value="5">5/4</option>
-                <option value="6">6/8</option>
-                <option value="7">7/8</option>
-              </select>
-            </label>
+  <main id="viewSongs" class="view">
+    <h1 class="page-title">Repertorio</h1>
+    <button class="big wide" id="saveCur"><i class="fa-solid fa-plus"></i> Guardar ajuste actual</button>
+    <ul class="songs" id="songList"></ul>
+    <p class="empty" id="songEmpty">Todavía no hay ajustes guardados.</p>
+  </main>
 
-            <label class="control-card">
-              <span>Subdivisión</span>
-              <select id="subdivision">
-                <option value="1" selected>Negras</option>
-                <option value="2">Corcheas</option>
-                <option value="3">Tresillos</option>
-                <option value="4">Semicorcheas</option>
-              </select>
-            </label>
+  <nav class="tabbar">
+    <button class="tab active" data-view="viewMetro"><i class="fa-solid fa-gauge-high"></i><span>Metrónomo</span></button>
+    <button class="tab" data-view="viewSongs"><i class="fa-solid fa-music"></i><span>Repertorio</span></button>
+    <button class="tab" id="lockNow"><i class="fa-solid fa-lock"></i><span>Bloquear</span></button>
+  </nav>
+</div>
 
-            <label class="control-card">
-              <span>Volumen</span>
-              <input id="volume" type="range" min="0" max="1" step="0.01" value="0.75" />
-            </label>
+<div class="sheet-backdrop" id="backdrop" hidden>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true">
+    <h2 id="sheetTitle"></h2>
+    <div id="sheetBody"></div>
+    <div class="sheet-actions" id="sheetActions"></div>
+  </div>
+</div>
 
-            <label class="control-card switch-card">
-              <span>Acento</span>
-              <input id="accentToggle" type="checkbox" checked />
-            </label>
-
-            <div class="control-card mic-card">
-              <span>Micrófono</span>
-              <button class="mic-button" id="toggleMic" type="button" aria-pressed="false">Activar</button>
-            </div>
-
-            <label class="control-card">
-              <span>Sincronía <output id="syncOffsetValue">0 ms</output></span>
-              <input id="syncOffset" type="range" min="-150" max="150" step="1" value="0" />
-            </label>
-
-            <label class="control-card">
-              <span>Sensibilidad</span>
-              <input id="micSensitivity" type="range" min="1" max="5" step="0.1" value="2.4" />
-            </label>
-
-            <div class="control-card score-card" aria-live="polite">
-              <span>Precisión</span>
-              <strong id="precisionReadout">--</strong>
-              <small id="streakReadout">Racha 0</small>
-            </div>
-
-            <div class="control-card calibration-card">
-              <div>
-                <span>Calibración</span>
-                <strong id="calibrationReadout">8 golpes</strong>
-              </div>
-              <button class="calibration-button" id="toggleCalibration" type="button">Calibrar</button>
-              <div class="calibration-lane" id="calibrationLane" aria-hidden="true">
-                <div class="calibration-ball" id="calibrationBall"></div>
-                <div class="calibration-target"></div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <div class="celebration" id="celebration" aria-live="polite"></div>
-      </section>
-    </main>
-
-    <script src="app.js"></script>
-  </body>
+<script src="app.js"></script>
+</body>
 </html>

@@ -1,694 +1,549 @@
-const state = {
-  tempo: 100,
-  beatsPerMeasure: 4,
-  subdivision: 1,
-  volume: 0.75,
-  accent: true,
-  isPlaying: false,
-  currentStep: 0,
-  nextNoteTime: 0,
-  schedulerId: null,
-  audioContext: null,
-  masterGain: null,
-  outputCompressor: null,
-  tapTimes: [],
-  swingSide: false,
-  practiceStartTime: 0,
-  isMicActive: false,
-  micStream: null,
-  micSource: null,
-  analyser: null,
-  micData: null,
-  micRafId: null,
-  micSensitivity: 2.4,
-  syncOffset: 0,
-  micOutputBoost: 1,
-  noiseFloor: 0.012,
-  previousMicLevel: 0,
-  lastOnsetTime: 0,
-  streak: 0,
-  bestStreak: 0,
-  lastMilestone: 0,
-  isCalibrating: false,
-  calibrationStartTime: 0,
-  calibrationSamples: [],
-  calibrationRafId: null,
-  calibrationHitsNeeded: 8,
+"use strict";
+
+/* ---------- Utilidades ---------- */
+const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
 };
 
-const settingsStorageKey = "metronome-settings-v1";
-const lookahead = 25;
-const scheduleAheadTime = 0.1;
+/* ---------- Estado ---------- */
+const SOUNDS = {
+  click:  { name: "Clic",    type: "square",   f: [1900, 1400, 1050], d: 0.03 },
+  madera: { name: "Madera",  type: "triangle", f: [950, 700, 520],    d: 0.055 },
+  bloque: { name: "Bloque",  type: "sine",     f: [1250, 940, 720],   d: 0.09 },
+  suave:  { name: "Suave",   type: "sine",     f: [880, 660, 520],    d: 0.14 },
+};
+const SUBDIVS = [
+  { n: 1, name: "Negra" }, { n: 2, name: "Corcheas" }, { n: 3, name: "Tresillo" }, { n: 4, name: "Semicorcheas" },
+];
+const GAIN = { 3: 1, 2: 0.6, 1: 0.32, sub: 0.16 };
 
-const tempoInput = document.querySelector("#tempoInput");
-const tempoSlider = document.querySelector("#tempoSlider");
-const decreaseTempo = document.querySelector("#decreaseTempo");
-const increaseTempo = document.querySelector("#increaseTempo");
-const togglePlayback = document.querySelector("#togglePlayback");
-const playIcon = document.querySelector("#playIcon");
-const playLabel = document.querySelector("#playLabel");
-const tapTempo = document.querySelector("#tapTempo");
-const beatsPerMeasure = document.querySelector("#beatsPerMeasure");
-const subdivision = document.querySelector("#subdivision");
-const volume = document.querySelector("#volume");
-const accentToggle = document.querySelector("#accentToggle");
-const beatRow = document.querySelector("#beatRow");
-const pulseRing = document.querySelector("#pulseRing");
-const pendulumArm = document.querySelector("#pendulumArm");
-const pendulumDot = document.querySelector("#pendulumDot");
-const statusText = document.querySelector("#statusText");
-const toggleMic = document.querySelector("#toggleMic");
-const syncOffset = document.querySelector("#syncOffset");
-const syncOffsetValue = document.querySelector("#syncOffsetValue");
-const micSensitivity = document.querySelector("#micSensitivity");
-const precisionReadout = document.querySelector("#precisionReadout");
-const streakReadout = document.querySelector("#streakReadout");
-const celebration = document.querySelector("#celebration");
-const toggleCalibration = document.querySelector("#toggleCalibration");
-const calibrationReadout = document.querySelector("#calibrationReadout");
-const calibrationLane = document.querySelector("#calibrationLane");
+const saved = store.get("metro.state", {});
+const state = Object.assign({
+  bpm: 62, num: 4, den: 4, sub: 1, sound: "click", vol: 0.9, timerMin: 0, levels: [3, 2, 2, 2],
+}, saved);
+state.levels = normalizeLevels(state.levels, state.num);
+let songs = store.get("metro.songs", []);
+const persist = () => store.set("metro.state", state);
 
-function isIOSDevice() {
-  return (
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
+function normalizeLevels(lv, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(lv && lv[i] !== undefined ? lv[i] : (i === 0 ? 3 : 2));
+  return out;
 }
 
-function setAudioSessionType(type) {
-  if (!navigator.audioSession) return;
-
-  try {
-    navigator.audioSession.type = type;
-  } catch {
-    // Some Safari versions expose the API but reject specific transitions.
-  }
-}
-
-function syncViewportProfile() {
-  const viewport = window.visualViewport;
-  const width = viewport?.width || window.innerWidth;
-  const height = viewport?.height || window.innerHeight;
-  const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
-  const mobileAgent = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-  const profile = coarsePointer || mobileAgent || width < 720 ? "mobile" : "desktop";
-  const orientation = width > height ? "landscape" : "portrait";
-
-  document.documentElement.style.setProperty("--app-height", `${height}px`);
-  document.body.dataset.profile = profile;
-  document.body.dataset.orientation = orientation;
-}
-
-function loadSettings() {
-  try {
-    const savedSettings = JSON.parse(localStorage.getItem(settingsStorageKey) || "{}");
-    const savedTempo = Number(savedSettings.tempo);
-    const savedBeats = Number(savedSettings.beatsPerMeasure);
-    const savedSubdivision = Number(savedSettings.subdivision);
-    const savedVolume = Number(savedSettings.volume);
-    const savedSyncOffset = Number(savedSettings.syncOffset);
-    const savedMicSensitivity = Number(savedSettings.micSensitivity);
-
-    state.tempo = Number.isFinite(savedTempo) ? clamp(savedTempo, 30, 240) : state.tempo;
-    state.beatsPerMeasure = Number.isFinite(savedBeats) ? clamp(savedBeats, 2, 7) : state.beatsPerMeasure;
-    state.subdivision = Number.isFinite(savedSubdivision) ? clamp(savedSubdivision, 1, 4) : state.subdivision;
-    state.volume = Number.isFinite(savedVolume) ? clamp(savedVolume, 0, 1) : state.volume;
-    state.accent = typeof savedSettings.accent === "boolean" ? savedSettings.accent : state.accent;
-    state.syncOffset = Number.isFinite(savedSyncOffset) ? clamp(savedSyncOffset, -150, 150) : state.syncOffset;
-    state.micSensitivity = Number.isFinite(savedMicSensitivity)
-      ? clamp(savedMicSensitivity, 1, 5)
-      : state.micSensitivity;
-  } catch {
-    localStorage.removeItem(settingsStorageKey);
-  }
-}
-
-function saveSettings() {
-  const settings = {
-    tempo: state.tempo,
-    beatsPerMeasure: state.beatsPerMeasure,
-    subdivision: state.subdivision,
-    volume: state.volume,
-    accent: state.accent,
-    syncOffset: state.syncOffset,
-    micSensitivity: state.micSensitivity,
-  };
-
-  localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
-}
-
-function syncControlsFromState() {
-  beatsPerMeasure.value = String(state.beatsPerMeasure);
-  subdivision.value = String(state.subdivision);
-  volume.value = String(state.volume);
-  accentToggle.checked = state.accent;
-  syncOffset.value = String(state.syncOffset);
-  syncOffsetValue.textContent = `${state.syncOffset} ms`;
-  micSensitivity.value = String(state.micSensitivity);
-  setTempo(state.tempo);
-}
-
-function syncOffsetControl() {
-  syncOffset.value = String(state.syncOffset);
-  syncOffsetValue.textContent = `${state.syncOffset} ms`;
-  saveSettings();
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function setTempo(value) {
-  state.tempo = clamp(Math.round(Number(value) || 100), 30, 240);
-  tempoInput.value = state.tempo;
-  tempoSlider.value = state.tempo;
-  saveSettings();
-}
-
-function renderBeatRow() {
-  beatRow.innerHTML = "";
-  beatRow.style.setProperty("--beats", state.beatsPerMeasure);
-
-  for (let index = 0; index < state.beatsPerMeasure; index += 1) {
-    const dot = document.createElement("div");
-    dot.className = "beat-dot";
-    dot.setAttribute("aria-hidden", "true");
-    beatRow.appendChild(dot);
-  }
-}
-
-function ensureAudioContext() {
-  if (!state.audioContext) {
-    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
-    state.audioContext = new AudioContextConstructor();
-    state.outputCompressor = state.audioContext.createDynamicsCompressor();
-    state.masterGain = state.audioContext.createGain();
-    state.outputCompressor.threshold.setValueAtTime(-8, state.audioContext.currentTime);
-    state.outputCompressor.knee.setValueAtTime(18, state.audioContext.currentTime);
-    state.outputCompressor.ratio.setValueAtTime(6, state.audioContext.currentTime);
-    state.outputCompressor.attack.setValueAtTime(0.002, state.audioContext.currentTime);
-    state.outputCompressor.release.setValueAtTime(0.08, state.audioContext.currentTime);
-    state.masterGain.connect(state.outputCompressor);
-    state.outputCompressor.connect(state.audioContext.destination);
-  }
-
-  if (state.audioContext.state === "suspended") {
-    state.audioContext.resume();
-  }
-}
-
-function updateMasterGain() {
-  if (!state.masterGain || !state.audioContext) return;
-
-  const gain = state.isMicActive && isIOSDevice() ? state.micOutputBoost : 1;
-  state.masterGain.gain.setTargetAtTime(gain, state.audioContext.currentTime, 0.015);
-}
-
-function updatePracticeReadout(text = "--") {
-  precisionReadout.textContent = text;
-  streakReadout.textContent = `Racha ${state.streak}`;
-}
-
-function flashTimingFeedback(kind) {
-  document.body.classList.remove("timing-good", "timing-warn", "timing-bad");
-  window.clearTimeout(state.feedbackTimeout);
-  document.body.classList.add(`timing-${kind}`);
-  state.feedbackTimeout = window.setTimeout(() => {
-    document.body.classList.remove("timing-good", "timing-warn", "timing-bad");
-  }, 260);
-}
-
-function showCelebration(message) {
-  celebration.textContent = message;
-  celebration.classList.add("is-visible");
-  window.clearTimeout(state.celebrationTimeout);
-  state.celebrationTimeout = window.setTimeout(() => {
-    celebration.classList.remove("is-visible");
-  }, 2600);
-}
-
-function getNearestGridDistance(noteTime) {
-  if (!state.isPlaying || !state.practiceStartTime) return null;
-
-  const stepDuration = 60 / state.tempo / state.subdivision;
-  const elapsed = noteTime - state.practiceStartTime;
-  const nearestStep = Math.round(elapsed / stepDuration);
-  const nearestTime = state.practiceStartTime + nearestStep * stepDuration;
-
-  return (noteTime - nearestTime) * 1000;
-}
-
-function getNearestCalibrationDistance(noteTime) {
-  const beatDuration = 60 / state.tempo;
-  const elapsed = noteTime - state.calibrationStartTime;
-  const nearestBeat = Math.round(elapsed / beatDuration);
-  const nearestTime = state.calibrationStartTime + nearestBeat * beatDuration;
-
-  return (noteTime - nearestTime) * 1000;
-}
-
-function classifyTiming(deltaMs) {
-  const absDelta = Math.abs(deltaMs);
-
-  if (absDelta <= 35) return "good";
-  if (absDelta <= 85) return "warn";
-  return "bad";
-}
-
-function updateCalibrationReadout() {
-  const remaining = Math.max(0, state.calibrationHitsNeeded - state.calibrationSamples.length);
-  calibrationReadout.textContent = state.isCalibrating ? `${remaining} golpes` : `${state.calibrationHitsNeeded} golpes`;
-}
-
-function animateCalibrationBall() {
-  if (!state.isCalibrating || !state.audioContext) return;
-
-  const beatDuration = 60 / state.tempo;
-  const elapsed = state.audioContext.currentTime - state.calibrationStartTime;
-  const phase = (((elapsed % beatDuration) + beatDuration) % beatDuration) / beatDuration;
-  const arc = Math.sin(phase * Math.PI);
-
-  calibrationLane.style.setProperty("--ball-x", String(phase));
-  calibrationLane.style.setProperty("--ball-y", String(arc));
-  state.calibrationRafId = window.requestAnimationFrame(animateCalibrationBall);
-}
-
-function stopCalibration() {
-  state.isCalibrating = false;
-  window.cancelAnimationFrame(state.calibrationRafId);
-  state.calibrationRafId = null;
-  document.body.classList.remove("calibrating");
-  toggleCalibration.classList.remove("is-active");
-  toggleCalibration.textContent = "Calibrar";
-  calibrationLane.style.setProperty("--ball-x", "0.5");
-  calibrationLane.style.setProperty("--ball-y", "0.82");
-  updateCalibrationReadout();
-  statusText.textContent = state.isPlaying ? "Sonando" : state.isMicActive ? "Mic on" : "Listo";
-}
-
-function finishCalibration() {
-  if (!state.calibrationSamples.length) {
-    stopCalibration();
-    return;
-  }
-
-  const sortedSamples = [...state.calibrationSamples].sort((a, b) => a - b);
-  const middleIndex = Math.floor(sortedSamples.length / 2);
-  const medianDelta =
-    sortedSamples.length % 2
-      ? sortedSamples[middleIndex]
-      : (sortedSamples[middleIndex - 1] + sortedSamples[middleIndex]) / 2;
-
-  state.syncOffset = clamp(Math.round(state.syncOffset - medianDelta), -150, 150);
-  syncOffsetControl();
-  stopCalibration();
-  showCelebration(`Calibrado: ${state.syncOffset} ms`);
-  precisionReadout.textContent = `${Math.round(Math.abs(medianDelta))} ms corregidos`;
-}
-
-async function startCalibration() {
-  ensureAudioContext();
-
-  if (!state.isMicActive) {
-    await startMic();
-  }
-
-  if (!state.isMicActive) {
-    statusText.textContent = "Activa mic";
-    return;
-  }
-
-  if (state.isPlaying) {
-    stop();
-  }
-
-  state.isCalibrating = true;
-  state.calibrationSamples = [];
-  state.calibrationStartTime = state.audioContext.currentTime + 0.8;
-  state.lastOnsetTime = 0;
-  document.body.classList.add("calibrating");
-  toggleCalibration.classList.add("is-active");
-  toggleCalibration.textContent = "Parar";
-  statusText.textContent = "Calibrando";
-  updateCalibrationReadout();
-  animateCalibrationBall();
-}
-
-function handleCalibrationHit(detectedTime) {
-  if (detectedTime < state.calibrationStartTime) return;
-
-  const adjustedTime = detectedTime + state.syncOffset / 1000;
-  const deltaMs = getNearestCalibrationDistance(adjustedTime);
-  const timing = classifyTiming(deltaMs);
-
-  state.calibrationSamples.push(deltaMs);
-  flashTimingFeedback(timing);
-  precisionReadout.textContent = `${Math.round(Math.abs(deltaMs))} ms ${deltaMs < 0 ? "antes" : "tarde"}`;
-  updateCalibrationReadout();
-
-  if (state.calibrationSamples.length >= state.calibrationHitsNeeded) {
-    finishCalibration();
-  }
-}
-
-function evaluateDetectedNote(detectedTime) {
-  if (state.isCalibrating) {
-    handleCalibrationHit(detectedTime);
-    return;
-  }
-
-  if (!state.isPlaying) {
-    statusText.textContent = "Mic listo";
-    flashTimingFeedback("warn");
-    return;
-  }
-
-  const adjustedTime = detectedTime + state.syncOffset / 1000;
-  const deltaMs = getNearestGridDistance(adjustedTime);
-  if (deltaMs === null) return;
-
-  const timing = classifyTiming(deltaMs);
-  const roundedDelta = Math.round(deltaMs);
-  const label = roundedDelta === 0 ? "Exacto" : `${Math.abs(roundedDelta)} ms ${roundedDelta < 0 ? "antes" : "tarde"}`;
-
-  flashTimingFeedback(timing);
-  updatePracticeReadout(label);
-
-  if (timing === "good") {
-    state.streak += 1;
-    state.bestStreak = Math.max(state.bestStreak, state.streak);
-
-    if ([10, 50, 100].includes(state.streak) && state.lastMilestone !== state.streak) {
-      state.lastMilestone = state.streak;
-      showCelebration(`${state.streak} notas precisas seguidas`);
+/* ---------- Dibujo: 7 segmentos y notas ---------- */
+const SEG_MAP = {
+  0: "abcdef", 1: "bc", 2: "abdeg", 3: "abcdg", 4: "bcfg", 5: "acdfg", 6: "acdefg", 7: "abc", 8: "abcdefg", 9: "abcdfg",
+};
+const SEG_RECT = {
+  a: [6, 0, 22, 5], b: [29, 5, 5, 25], c: [29, 36, 5, 25], d: [6, 61, 22, 5], e: [0, 36, 5, 25], f: [0, 5, 5, 25], g: [6, 30.5, 22, 5],
+};
+function segSVG(text) {
+  let x = 0, out = "";
+  for (const ch of String(text)) {
+    if (ch === "/") {
+      out += `<polygon points="${x + 22},0 ${x + 28},0 ${x + 6},66 ${x},66" fill="#2fd0ec"/>`;
+      x += 26;
+      continue;
     }
-  } else if (timing === "bad") {
-    state.streak = 0;
+    const on = SEG_MAP[ch] || "";
+    for (const s in SEG_RECT) {
+      const [rx, ry, w, h] = SEG_RECT[s];
+      out += `<rect x="${x + rx}" y="${ry}" width="${w}" height="${h}" rx="2" fill="#2fd0ec" opacity="${on.includes(s) ? 1 : 0.07}"/>`;
+    }
+    x += 44;
   }
+  return `<svg viewBox="0 0 ${x} 66" xmlns="http://www.w3.org/2000/svg"><g transform="skewX(-7) translate(4 0)">${out}</g></svg>`;
+}
+function noteSVG(kind) {
+  const c = "#2fd0ec";
+  const head = (cx, cy, hollow) =>
+    `<ellipse cx="${cx}" cy="${cy}" rx="7" ry="5.2" transform="rotate(-20 ${cx} ${cy})" fill="${hollow ? "none" : c}" stroke="${c}" stroke-width="2"/>`;
+  const stem = (x, y1, y2) => `<rect x="${x - 1.2}" y="${y1}" width="2.4" height="${y2 - y1}" fill="${c}"/>`;
+  let body = "", w = 28;
+  if (kind === "half") body = head(10, 40, true) + stem(16.3, 6, 40);
+  else if (kind === "eighth1") body = head(10, 40, false) + stem(16.3, 6, 40) + `<path d="M17 6 C 24 12 28 20 22 30 C 25 20 21 16 17 14Z" fill="${c}"/>`;
+  else if (kind === "sixteenth1") body = head(10, 40, false) + stem(16.3, 6, 40) +
+    `<path d="M17 6 C 24 11 28 17 22 25 C 25 17 21 14 17 12Z" fill="${c}"/><path d="M17 15 C 24 20 28 26 22 34 C 25 26 21 23 17 21Z" fill="${c}"/>`;
+  else if (kind === "pair" || kind === "quad") {
+    w = 52;
+    body = head(10, 40, false) + head(36, 40, false) + stem(16.3, 8, 40) + stem(42.3, 8, 40) +
+      `<rect x="15" y="6" width="28.5" height="5.5" fill="${c}"/>` + (kind === "quad" ? `<rect x="15" y="15" width="28.5" height="5" fill="${c}"/>` : "");
+  } else if (kind === "triplet") {
+    w = 74;
+    body = head(10, 42, false) + head(36, 42, false) + head(62, 42, false) +
+      stem(16.3, 12, 42) + stem(42.3, 12, 42) + stem(68.3, 12, 42) + `<rect x="15" y="10" width="54.5" height="5.5" fill="${c}"/>` +
+      `<text x="42" y="7" text-anchor="middle" font-size="12" font-family="-apple-system, sans-serif" font-weight="700" fill="${c}">3</text>`;
+  } else body = head(10, 40, false) + stem(16.3, 6, 40);
+  return `<svg viewBox="0 0 ${w} 52" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+}
+const subKind = () => ["quarter", "pair", "triplet", "quad"][state.sub - 1];
+const unitKind = () => ({ 2: "half", 4: "quarter", 8: "eighth1", 16: "sixteenth1" })[state.den] || "quarter";
 
-  streakReadout.textContent = `Racha ${state.streak}`;
+/* ---------- Nombre del tempo ---------- */
+function tempoName(b) {
+  if (b < 40) return "Grave";
+  if (b < 60) return "Largo";
+  if (b < 76) return "Adagio";
+  if (b < 108) return "Andante";
+  if (b < 120) return "Moderato";
+  if (b < 156) return "Allegro";
+  if (b < 176) return "Vivace";
+  if (b < 200) return "Presto";
+  return "Prestissimo";
 }
 
-function readMicLevel() {
-  state.analyser.getFloatTimeDomainData(state.micData);
-
-  let sum = 0;
-  let peak = 0;
-
-  for (const sample of state.micData) {
-    const absSample = Math.abs(sample);
-    sum += sample * sample;
-    peak = Math.max(peak, absSample);
-  }
-
-  return Math.max(Math.sqrt(sum / state.micData.length), peak * 0.58);
+/* ---------- Render ---------- */
+function renderAll() {
+  $("tempoDigits").innerHTML = segSVG(String(state.bpm).padStart(state.bpm > 99 ? 3 : 2, " ").trim());
+  $("tempoName").textContent = tempoName(state.bpm);
+  $("sigDigits").innerHTML = segSVG(`${state.num}/${state.den}`);
+  $("sigBtn").textContent = `${state.num}/${state.den}`;
+  $("beatUnit").innerHTML = noteSVG(unitKind());
+  $("subIco").innerHTML = noteSVG(subKind());
+  $("ring").style.transform = `rotate(${(state.bpm * 3) % 360}deg)`;
+  renderPads();
+  document.querySelectorAll(".toolbar button").forEach((b) => b.classList.remove("active"));
+  if (state.timerMin > 0) $("btnTimer").classList.add("active");
+  if (wakeLock) $("btnAwake").classList.add("active");
 }
-
-function monitorMic() {
-  if (!state.isMicActive || !state.analyser) return;
-
-  const level = readMicLevel();
-  const now = state.audioContext.currentTime;
-  const sensitivityFactor = 7 - state.micSensitivity;
-  const threshold = Math.max(0.012, state.noiseFloor * sensitivityFactor);
-  const risingFast = level - state.previousMicLevel > threshold * 0.22;
-  const refractoryDone = now - state.lastOnsetTime > 0.12;
-
-  if (level < threshold * 0.82) {
-    state.noiseFloor = state.noiseFloor * 0.985 + level * 0.015;
-  }
-
-  if (level > threshold && risingFast && refractoryDone) {
-    state.lastOnsetTime = now;
-    evaluateDetectedNote(now);
-  }
-
-  state.previousMicLevel = level;
-  state.micRafId = window.requestAnimationFrame(monitorMic);
-}
-
-async function startMic() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    statusText.textContent = "Sin mic";
-    return;
-  }
-
-  ensureAudioContext();
-  statusText.textContent = "Mic...";
-  setAudioSessionType("auto");
-
-  try {
-    state.micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
-      video: false,
-    });
-
-    setAudioSessionType("play-and-record");
-    state.micSource = state.audioContext.createMediaStreamSource(state.micStream);
-    state.analyser = state.audioContext.createAnalyser();
-    state.analyser.fftSize = 1024;
-    state.analyser.smoothingTimeConstant = 0.16;
-    state.micData = new Float32Array(state.analyser.fftSize);
-    state.noiseFloor = 0.012;
-    state.previousMicLevel = 0;
-    state.lastOnsetTime = 0;
-    state.micSource.connect(state.analyser);
-    state.isMicActive = true;
-    updateMasterGain();
-    toggleMic.classList.add("is-listening");
-    toggleMic.setAttribute("aria-pressed", "true");
-    toggleMic.textContent = "Oyendo";
-    statusText.textContent = "Mic on";
-    monitorMic();
-  } catch {
-    statusText.textContent = state.isPlaying ? "Sonando" : "Listo";
-    toggleMic.classList.remove("is-listening");
-    toggleMic.setAttribute("aria-pressed", "false");
-    toggleMic.textContent = "Activar";
-  }
-}
-
-function stopMic() {
-  if (state.isCalibrating) {
-    stopCalibration();
-  }
-
-  state.isMicActive = false;
-  window.cancelAnimationFrame(state.micRafId);
-  state.micRafId = null;
-  state.micSource?.disconnect();
-  state.micStream?.getTracks().forEach((track) => track.stop());
-  state.micSource = null;
-  state.micStream = null;
-  state.analyser = null;
-  state.micData = null;
-  updateMasterGain();
-  setAudioSessionType("playback");
-  setAudioSessionType("auto");
-  toggleMic.classList.remove("is-listening");
-  toggleMic.setAttribute("aria-pressed", "false");
-  toggleMic.textContent = "Activar";
-  statusText.textContent = state.isPlaying ? "Sonando" : "Listo";
-}
-
-function playClick(time, isAccent, isSubdivision) {
-  const context = state.audioContext;
-  const oscillator = context.createOscillator();
-  const gain = context.createGain();
-  const filter = context.createBiquadFilter();
-  const baseVolume = state.volume * (isSubdivision ? 0.38 : 0.75);
-
-  oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(isAccent ? 1360 : isSubdivision ? 760 : 1020, time);
-  filter.type = "highpass";
-  filter.frequency.setValueAtTime(620, time);
-  gain.gain.setValueAtTime(0.0001, time);
-  gain.gain.exponentialRampToValueAtTime(Math.max(baseVolume, 0.0001), time + 0.005);
-  gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.06);
-
-  oscillator.connect(filter);
-  filter.connect(gain);
-  gain.connect(state.masterGain || context.destination);
-  oscillator.start(time);
-  oscillator.stop(time + 0.07);
-}
-
-function animateBeat(step) {
-  const beatIndex = Math.floor(step / state.subdivision) % state.beatsPerMeasure;
-  const isMainBeat = step % state.subdivision === 0;
-  const dots = [...beatRow.children];
-
-  dots.forEach((dot, index) => {
-    dot.classList.toggle("is-active", index === beatIndex && isMainBeat);
-    dot.classList.toggle("is-accent", index === 0 && state.accent && isMainBeat);
+function renderPads() {
+  const pads = $("pads");
+  pads.innerHTML = "";
+  state.levels.forEach((lv, i) => {
+    const col = document.createElement("div");
+    col.className = "col";
+    col.dataset.i = i;
+    for (let row = 3; row >= 1; row--) {
+      const c = document.createElement("button");
+      c.className = "cell" + (lv >= row ? " on" : "");
+      c.setAttribute("aria-label", `Tiempo ${i + 1}, nivel ${row}`);
+      c.addEventListener("click", () => {
+        state.levels[i] = state.levels[i] === row ? row - 1 : row;
+        persist();
+        renderPads();
+      });
+      col.appendChild(c);
+    }
+    pads.appendChild(col);
   });
-
-  pulseRing.classList.add("is-hit");
-  window.setTimeout(() => pulseRing.classList.remove("is-hit"), 90);
-
-  state.swingSide = !state.swingSide;
-  const rotation = state.swingSide ? 22 : -22;
-  const dotOffset = state.swingSide ? 31 : -31;
-  pendulumArm.style.transform = `rotate(${rotation}deg)`;
-  pendulumDot.style.transform = `translateX(${dotOffset}px)`;
+}
+function setBpm(v) {
+  const n = clamp(Math.round(v), 20, 300);
+  if (n === state.bpm) return;
+  state.bpm = n;
+  $("tempoDigits").innerHTML = segSVG(String(n));
+  $("tempoName").textContent = tempoName(n);
+  $("ring").style.transform = `rotate(${(n * 3) % 360}deg)`;
+  persist();
+}
+function setSignature(num, den) {
+  state.num = clamp(num, 1, 12);
+  state.den = den;
+  state.levels = normalizeLevels(state.levels, state.num);
+  beatIdx = 0;
+  persist();
+  renderAll();
 }
 
-function scheduleNote(step, time) {
-  const isMainBeat = step % state.subdivision === 0;
-  const beatIndex = Math.floor(step / state.subdivision) % state.beatsPerMeasure;
-  const isAccent = state.accent && beatIndex === 0 && isMainBeat;
+/* ---------- Audio ---------- */
+let ctx = null, master = null, silentEl = null;
+let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], startedAt = 0;
 
-  playClick(time, isAccent, !isMainBeat);
-  window.setTimeout(() => animateBeat(step), Math.max(0, (time - state.audioContext.currentTime) * 1000));
+function silentWav() {
+  const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVEfmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+  let bin = ""; new Uint8Array(buf).forEach((b) => (bin += String.fromCharCode(b)));
+  return "data:audio/wav;base64," + btoa(bin);
 }
-
-function nextNote() {
-  const secondsPerBeat = 60 / state.tempo;
-  state.nextNoteTime += secondsPerBeat / state.subdivision;
-  state.currentStep = (state.currentStep + 1) % (state.beatsPerMeasure * state.subdivision);
+function ensureAudio() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    const comp = ctx.createDynamicsCompressor();
+    master.connect(comp); comp.connect(ctx.destination);
+  }
+  master.gain.value = state.vol;
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* no disponible */ }
+  if (!silentEl) {
+    silentEl = new Audio(silentWav());
+    silentEl.loop = true;
+    silentEl.setAttribute("playsinline", "");
+  }
+  silentEl.play().catch(() => {});
+  if (ctx.state !== "running") ctx.resume();
 }
-
+function click(time, level) {
+  const s = SOUNDS[state.sound];
+  const idx = level === 3 ? 0 : level === 2 ? 1 : 2;
+  const freq = level === "sub" ? s.f[2] * 0.85 : s.f[idx];
+  const g = (GAIN[level] || 0.4);
+  const o = ctx.createOscillator(), e = ctx.createGain();
+  o.type = s.type; o.frequency.value = freq;
+  e.gain.setValueAtTime(0.0001, time);
+  e.gain.exponentialRampToValueAtTime(g * (s.type === "square" ? 0.5 : 0.9), time + 0.002);
+  e.gain.exponentialRampToValueAtTime(0.0001, time + s.d);
+  o.connect(e); e.connect(master);
+  o.start(time); o.stop(time + s.d + 0.02);
+}
 function scheduler() {
-  while (state.nextNoteTime < state.audioContext.currentTime + scheduleAheadTime) {
-    scheduleNote(state.currentStep, state.nextNoteTime);
-    nextNote();
+  const step = 60 / state.bpm / state.sub;
+  while (nextTime < ctx.currentTime + 0.12) {
+    if (beatIdx >= state.num) beatIdx = 0;
+    if (subIdx === 0) {
+      const lv = state.levels[beatIdx];
+      if (lv > 0) click(nextTime, lv);
+      visQueue.push({ t: nextTime, beat: beatIdx });
+    } else {
+      click(nextTime, "sub");
+    }
+    nextTime += step;
+    if (++subIdx >= state.sub) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; }
   }
 }
-
+function visLoop() {
+  if (!running) return;
+  while (visQueue.length && visQueue[0].t <= ctx.currentTime) flash(visQueue.shift().beat);
+  if (state.timerMin > 0) {
+    const left = state.timerMin * 60 - (performance.now() - startedAt) / 1000;
+    if (left <= 0) { stop(); return; }
+    $("status").textContent = `Temporizador: ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
+  }
+  requestAnimationFrame(visLoop);
+}
+function flash(i) {
+  document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
+  const c = document.querySelector(`.col[data-i="${i}"]`);
+  if (c) c.classList.add("beat");
+}
 function start() {
-  ensureAudioContext();
-  state.isPlaying = true;
-  state.currentStep = 0;
-  state.nextNoteTime = state.audioContext.currentTime + 0.05;
-  state.practiceStartTime = state.nextNoteTime;
-  state.streak = 0;
-  state.lastMilestone = 0;
-  updatePracticeReadout();
-  state.schedulerId = window.setInterval(scheduler, lookahead);
-  togglePlayback.classList.add("is-playing");
-  togglePlayback.setAttribute("aria-pressed", "true");
-  playIcon.textContent = "Ⅱ";
-  playLabel.textContent = "Pausar";
-  statusText.textContent = "Sonando";
+  if (running) return;
+  ensureAudio();
+  running = true;
+  beatIdx = 0; subIdx = 0; visQueue = [];
+  nextTime = ctx.currentTime + 0.08;
+  startedAt = performance.now();
+  timerId = setInterval(scheduler, 25);
+  scheduler();
+  $("play").classList.add("running");
+  $("play").innerHTML = '<i class="fa-solid fa-pause"></i>';
+  requestAnimationFrame(visLoop);
 }
-
 function stop() {
-  state.isPlaying = false;
-  window.clearInterval(state.schedulerId);
-  state.schedulerId = null;
-  state.practiceStartTime = 0;
-  togglePlayback.classList.remove("is-playing");
-  togglePlayback.setAttribute("aria-pressed", "false");
-  playIcon.textContent = "▶";
-  playLabel.textContent = "Iniciar";
-  statusText.textContent = "Listo";
-  state.streak = 0;
-  updatePracticeReadout();
-  [...beatRow.children].forEach((dot) => dot.classList.remove("is-active", "is-accent"));
+  if (!running) return;
+  running = false;
+  clearInterval(timerId);
+  if (silentEl) silentEl.pause();
+  document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
+  $("play").classList.remove("running");
+  $("play").innerHTML = '<i class="fa-solid fa-play"></i>';
+  $("status").innerHTML = "&nbsp;";
 }
 
-function handleTapTempo() {
+/* ---------- Diales y botones ---------- */
+(function setupDial() {
+  const dial = $("dial");
+  let last = null, acc = 0, start0 = 0;
+  const ang = (e) => {
+    const r = dial.getBoundingClientRect();
+    return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
+  };
+  dial.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    last = ang(e); acc = 0; start0 = state.bpm;
+    dial.setPointerCapture(e.pointerId);
+  });
+  dial.addEventListener("pointermove", (e) => {
+    if (last === null) return;
+    const a = ang(e);
+    let d = a - last;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    last = a; acc += d;
+    setBpm(start0 + acc / 3);
+  });
+  const end = () => { last = null; };
+  dial.addEventListener("pointerup", end);
+  dial.addEventListener("pointercancel", end);
+})();
+
+function holdRepeat(el, delta) {
+  let t1, t2;
+  const stopH = () => { clearTimeout(t1); clearInterval(t2); };
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    setBpm(state.bpm + delta);
+    t1 = setTimeout(() => { t2 = setInterval(() => setBpm(state.bpm + delta), 70); }, 400);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => el.addEventListener(ev, stopH));
+}
+holdRepeat($("minus"), -1);
+holdRepeat($("plus"), 1);
+$("play").addEventListener("click", () => (running ? stop() : start()));
+
+let taps = [];
+$("tapBtn").addEventListener("click", () => {
   const now = performance.now();
-  state.tapTimes = state.tapTimes.filter((time) => now - time < 2200);
-  state.tapTimes.push(now);
-
-  if (state.tapTimes.length < 2) {
-    statusText.textContent = "Tap...";
-    return;
+  if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
+  taps.push(now);
+  taps = taps.slice(-7);
+  if (taps.length >= 2) {
+    const iv = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
+    setBpm(60000 / iv);
   }
+});
 
-  const intervals = state.tapTimes.slice(1).map((time, index) => time - state.tapTimes[index]);
-  const average = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
-  setTempo(60000 / average);
-  statusText.textContent = `${state.tempo} BPM`;
+$("subBtn").addEventListener("click", () => { state.sub = (state.sub % 4) + 1; persist(); renderAll(); });
+$("sigBtn").addEventListener("click", openSignature);
+$("sigDisplay").addEventListener("click", openSignature);
+$("tempoBtn").addEventListener("click", openTempoInput);
+
+/* ---------- Hojas de diálogo propias ---------- */
+function sheet(title, build, actions) {
+  return new Promise((resolve) => {
+    $("sheetTitle").textContent = title;
+    const body = $("sheetBody");
+    body.innerHTML = "";
+    build(body);
+    const act = $("sheetActions");
+    act.innerHTML = "";
+    const close = (v) => { $("backdrop").hidden = true; resolve(v); };
+    actions.forEach((a) => {
+      const b = document.createElement("button");
+      b.textContent = a.label;
+      if (a.cls) b.className = a.cls;
+      b.addEventListener("click", () => close(a.value === undefined ? a.label : (typeof a.value === "function" ? a.value() : a.value)));
+      act.appendChild(b);
+    });
+    $("backdrop").onclick = (e) => { if (e.target === $("backdrop")) close(null); };
+    $("backdrop").hidden = false;
+  });
+}
+const askConfirm = (title, text, okLabel = "Eliminar") =>
+  sheet(title, (b) => { b.innerHTML = `<p class="note">${text}</p>`; },
+    [{ label: "Cancelar", value: false }, { label: okLabel, cls: "danger", value: true }]);
+
+function stepper(label, get, set, min, max, fmt = (v) => v) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<label>${label}</label><div class="stepper"><button aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output></output><button aria-label="Más"><i class="fa-solid fa-plus"></i></button></div>`;
+  const out = row.querySelector("output");
+  const upd = () => (out.textContent = fmt(get()));
+  const [m, p] = row.querySelectorAll("button");
+  m.onclick = () => { set(clamp(get() - 1, min, max)); upd(); };
+  p.onclick = () => { set(clamp(get() + 1, min, max)); upd(); };
+  upd();
+  return row;
+}
+function chips(options, current, onPick) {
+  const wrap = document.createElement("div");
+  wrap.className = "chips";
+  options.forEach(([val, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (val === current) b.className = "sel";
+    b.onclick = () => { wrap.querySelectorAll("button").forEach((x) => x.classList.remove("sel")); b.className = "sel"; onPick(val); };
+    wrap.appendChild(b);
+  });
+  return wrap;
 }
 
-tempoInput.addEventListener("change", (event) => setTempo(event.target.value));
-tempoInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    setTempo(event.target.value);
-    event.target.blur();
+function openSignature() {
+  let n = state.num, d = state.den;
+  sheet("Compás", (b) => {
+    b.appendChild(stepper("Tiempos por compás", () => n, (v) => (n = v), 1, 12));
+    const l = document.createElement("div");
+    l.className = "row"; l.innerHTML = "<label>Figura que marca el pulso</label>";
+    b.appendChild(l);
+    b.appendChild(chips([[2, "2"], [4, "4"], [8, "8"], [16, "16"]], d, (v) => (d = v)));
+  }, [{ label: "Cancelar", value: false }, { label: "Aplicar", cls: "primary", value: true }]).then((ok) => {
+    if (ok) setSignature(n, d);
+  });
+}
+function openTempoInput() {
+  let inp;
+  sheet("Tempo (BPM)", (b) => {
+    inp = document.createElement("input");
+    inp.type = "tel"; inp.inputMode = "numeric"; inp.value = state.bpm; inp.maxLength = 3;
+    b.appendChild(inp);
+    b.insertAdjacentHTML("beforeend", '<p class="note">Entre 20 y 300.</p>');
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+  }, [{ label: "Cancelar", value: false }, { label: "Aplicar", cls: "primary", value: true }]).then((ok) => {
+    if (ok && inp.value) setBpm(parseInt(inp.value, 10) || state.bpm);
+  });
+}
+$("btnSound").addEventListener("click", () => {
+  sheet("Sonido", (b) => {
+    b.appendChild(chips(Object.entries(SOUNDS).map(([k, v]) => [k, v.name]), state.sound, (v) => { state.sound = v; persist(); }));
+    const l = document.createElement("div");
+    l.className = "row"; l.innerHTML = "<label>Subdivisión</label>";
+    b.appendChild(l);
+    b.appendChild(chips(SUBDIVS.map((s) => [s.n, s.name]), state.sub, (v) => { state.sub = v; persist(); renderAll(); }));
+  }, [{ label: "Listo", cls: "primary", value: true }]);
+});
+$("btnTimer").addEventListener("click", () => {
+  let m = state.timerMin;
+  sheet("Temporizador", (b) => {
+    b.appendChild(stepper("Detener tras (min)", () => m, (v) => (m = v), 0, 120, (v) => (v === 0 ? "Sin límite" : v)));
+  }, [{ label: "Cancelar", value: false }, { label: "Aplicar", cls: "primary", value: true }]).then((ok) => {
+    if (ok) { state.timerMin = m; persist(); renderAll(); }
+  });
+});
+$("btnVol").addEventListener("click", () => {
+  sheet("Volumen", (b) => {
+    const r = document.createElement("input");
+    r.type = "range"; r.min = 0; r.max = 1; r.step = 0.01; r.value = state.vol;
+    r.oninput = () => { state.vol = +r.value; if (master) master.gain.value = state.vol; persist(); };
+    b.appendChild(r);
+  }, [{ label: "Listo", cls: "primary", value: true }]);
+});
+
+let wakeLock = null;
+$("btnAwake").addEventListener("click", async () => {
+  if (wakeLock) { try { await wakeLock.release(); } catch {} wakeLock = null; $("btnAwake").classList.remove("active"); return; }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; $("btnAwake").classList.remove("active"); });
+    $("btnAwake").classList.add("active");
+  } catch {
+    sheet("Pantalla encendida", (b) => { b.innerHTML = '<p class="note">Este dispositivo no permite mantener la pantalla encendida.</p>'; },
+      [{ label: "Entendido", cls: "primary", value: true }]);
   }
 });
-tempoSlider.addEventListener("input", (event) => setTempo(event.target.value));
-decreaseTempo.addEventListener("click", () => setTempo(state.tempo - 1));
-increaseTempo.addEventListener("click", () => setTempo(state.tempo + 1));
-tapTempo.addEventListener("click", handleTapTempo);
 
-togglePlayback.addEventListener("click", () => {
-  if (state.isPlaying) {
-    stop();
+/* ---------- Pestañas y repertorio ---------- */
+document.querySelectorAll(".tab[data-view]").forEach((t) => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === t.dataset.view));
+}));
+function showView(id) { document.querySelector(`.tab[data-view="${id}"]`).click(); }
+
+function renderSongs() {
+  const ul = $("songList");
+  ul.innerHTML = "";
+  $("songEmpty").hidden = songs.length > 0;
+  songs.forEach((s, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<button class="info"><div class="nm"></div><div class="meta"></div></button><button class="del" aria-label="Eliminar"><i class="fa-solid fa-trash"></i></button>`;
+    li.querySelector(".nm").textContent = s.name;
+    li.querySelector(".meta").textContent = `${s.bpm} BPM, ${s.num}/${s.den}, ${SUBDIVS[s.sub - 1].name}`;
+    li.querySelector(".info").onclick = () => {
+      Object.assign(state, { bpm: s.bpm, num: s.num, den: s.den, sub: s.sub, levels: normalizeLevels(s.levels, s.num) });
+      persist(); renderAll(); showView("viewMetro");
+    };
+    li.querySelector(".del").onclick = async () => {
+      if (await askConfirm("Eliminar ajuste", `Se eliminará "${s.name.replace(/</g, "&lt;")}" del repertorio.`)) {
+        songs.splice(i, 1); store.set("metro.songs", songs); renderSongs();
+      }
+    };
+    ul.appendChild(li);
+  });
+}
+$("saveCur").addEventListener("click", () => {
+  let inp;
+  sheet("Guardar ajuste", (b) => {
+    inp = document.createElement("input");
+    inp.type = "text"; inp.placeholder = "Nombre de la pieza"; inp.maxLength = 40;
+    b.appendChild(inp);
+    setTimeout(() => inp.focus(), 60);
+  }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
+    const name = inp.value.trim();
+    if (!ok || !name) return;
+    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, sub: state.sub, levels: [...state.levels] });
+    store.set("metro.songs", songs); renderSongs();
+  });
+});
+
+/* ---------- Clave de acceso (PIN) ---------- */
+const PIN_LEN = 4;
+const lockEl = $("lock");
+let pinBuf = "", pinMode = "enter", pinFirst = "", failCount = 0, lockedUntil = 0, hiddenAt = 0;
+
+const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+async function hashPin(pin, saltHex) {
+  const salt = Uint8Array.from(saltHex.match(/../g).map((h) => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  return toHex(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, key, 256));
+}
+function drawDots(err) {
+  const d = $("lockDots");
+  d.innerHTML = "";
+  for (let i = 0; i < PIN_LEN; i++) d.insertAdjacentHTML("beforeend", `<i class="${i < pinBuf.length ? "f" : ""}"></i>`);
+  if (err) { d.classList.remove("shake"); void d.offsetWidth; d.classList.add("shake"); }
+}
+function lockMsg(title, hint, isErr) {
+  $("lockTitle").textContent = title;
+  $("lockHint").textContent = hint || "";
+  $("lockHint").classList.toggle("err", !!isErr);
+}
+function showLock() {
+  stop();
+  pinBuf = ""; pinFirst = "";
+  const cfg = store.get("metro.pin", null);
+  pinMode = cfg ? "enter" : "create";
+  lockMsg(cfg ? "Ingresa tu clave" : "Crea tu clave", cfg ? "" : `Elige ${PIN_LEN} dígitos para proteger la app.`);
+  drawDots();
+  lockEl.hidden = false;
+  $("app").hidden = true;
+}
+function unlock() {
+  lockEl.hidden = true;
+  $("app").hidden = false;
+}
+async function submitPin() {
+  const pin = pinBuf;
+  pinBuf = "";
+  if (pinMode === "create") {
+    pinFirst = pin; pinMode = "confirm";
+    lockMsg("Confirma tu clave", "Escríbela de nuevo.");
+    drawDots();
+  } else if (pinMode === "confirm") {
+    if (pin !== pinFirst) {
+      pinMode = "create"; pinFirst = "";
+      lockMsg("Crea tu clave", "No coincidieron, inténtalo otra vez.", true);
+      drawDots(true);
+      return;
+    }
+    const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
+    store.set("metro.pin", { salt, hash: await hashPin(pin, salt) });
+    unlock();
   } else {
-    start();
+    const wait = lockedUntil - Date.now();
+    if (wait > 0) { lockMsg("Demasiados intentos", `Espera ${Math.ceil(wait / 1000)} s.`, true); drawDots(true); return; }
+    const cfg = store.get("metro.pin", null);
+    if (cfg && (await hashPin(pin, cfg.salt)) === cfg.hash) {
+      failCount = 0; unlock();
+    } else {
+      failCount++;
+      if (failCount >= 5) { lockedUntil = Date.now() + 30000; failCount = 0; lockMsg("Demasiados intentos", "Espera 30 s.", true); }
+      else lockMsg("Ingresa tu clave", "Clave incorrecta.", true);
+      drawDots(true);
+    }
   }
+}
+$("keypad").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const k = b.dataset.k;
+  if (k === "del") pinBuf = pinBuf.slice(0, -1);
+  else if (pinBuf.length < PIN_LEN) pinBuf += k;
+  drawDots();
+  if (pinBuf.length === PIN_LEN) setTimeout(submitPin, 120);
+});
+$("lockNow").addEventListener("click", showLock);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (hiddenAt && Date.now() - hiddenAt > 60000 && lockEl.hidden) showLock();
 });
 
-beatsPerMeasure.addEventListener("change", (event) => {
-  state.beatsPerMeasure = Number(event.target.value);
-  state.currentStep = 0;
-  saveSettings();
-  renderBeatRow();
-});
-
-subdivision.addEventListener("change", (event) => {
-  state.subdivision = Number(event.target.value);
-  state.currentStep = 0;
-  saveSettings();
-});
-
-volume.addEventListener("input", (event) => {
-  state.volume = Number(event.target.value);
-  saveSettings();
-});
-
-accentToggle.addEventListener("change", (event) => {
-  state.accent = event.target.checked;
-  saveSettings();
-});
-
-toggleMic.addEventListener("click", () => {
-  if (state.isMicActive) {
-    stopMic();
-  } else {
-    startMic();
-  }
-});
-
-syncOffset.addEventListener("input", (event) => {
-  state.syncOffset = Number(event.target.value);
-  syncOffsetControl();
-});
-
-micSensitivity.addEventListener("input", (event) => {
-  state.micSensitivity = Number(event.target.value);
-  saveSettings();
-});
-
-toggleCalibration.addEventListener("click", () => {
-  if (state.isCalibrating) {
-    stopCalibration();
-  } else {
-    startCalibration();
-  }
-});
-
-window.addEventListener("keydown", (event) => {
-  if (event.code === "Space") {
-    event.preventDefault();
-    togglePlayback.click();
-  }
-});
-
-window.addEventListener("resize", syncViewportProfile);
-window.visualViewport?.addEventListener("resize", syncViewportProfile);
-window.addEventListener("orientationchange", syncViewportProfile);
-
-syncViewportProfile();
-loadSettings();
-syncControlsFromState();
-updateCalibrationReadout();
-renderBeatRow();
+/* ---------- Arranque ---------- */
+renderAll();
+renderSongs();
+showLock();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

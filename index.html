@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="stylesheet" href="style.css?v=5">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -21,8 +21,12 @@
   try {
     var c = JSON.parse(localStorage.getItem("metro.theme") || '"auto"');
     var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.dataset.theme = c === "auto" ? (dark ? "medianoche" : "claro") : c;
-  } catch (e) {}
+    var t = c === "auto" ? (dark ? "medianoche" : "claro") : c;
+    document.documentElement.dataset.theme = t;
+    var k = JSON.parse(localStorage.getItem("metro.ctl") || '"tema"');
+    var def = { medianoche: "disco", claro: "regla", grafito: "pend", aurora: "orbe", ambar: "pend", carmesi: "orbe" };
+    document.documentElement.dataset.ctl = k === "tema" ? (def[t] || "disco") : k;
+  } catch (e) { document.documentElement.dataset.ctl = "disco"; }
 })();
 </script>
 </head>
@@ -57,19 +61,62 @@
     <div class="status" id="status">&nbsp;</div>
 
     <div class="dial-wrap">
-      <div class="dial" id="dial">
-        <svg class="prog" viewBox="0 0 100 100" aria-hidden="true">
-          <circle class="track" cx="50" cy="50" r="47" pathLength="100"></circle>
-          <circle class="val" id="prog" cx="50" cy="50" r="47" pathLength="100"></circle>
-        </svg>
-        <div class="knob">
-          <div class="ring" id="ring"></div>
-          <div class="face"></div>
+
+      <!-- Disco -->
+      <div class="ctl ctl-disco">
+        <div class="dial" id="dial">
+          <svg class="prog" viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="track" cx="50" cy="50" r="47" pathLength="100"></circle>
+            <circle class="val" id="prog" cx="50" cy="50" r="47" pathLength="100"></circle>
+          </svg>
+          <div class="knob">
+            <div class="ring" id="ring"></div>
+            <div class="face"></div>
+          </div>
+          <button class="arrow left js-minus" aria-label="Bajar tempo"><i class="fa-solid fa-chevron-left"></i></button>
+          <button class="arrow right js-plus" aria-label="Subir tempo"><i class="fa-solid fa-chevron-right"></i></button>
+          <button class="play js-play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
         </div>
-        <button class="arrow left" id="minus" aria-label="Bajar tempo"><i class="fa-solid fa-chevron-left"></i></button>
-        <button class="arrow right" id="plus" aria-label="Subir tempo"><i class="fa-solid fa-chevron-right"></i></button>
-        <button class="play" id="play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
       </div>
+
+      <!-- Péndulo -->
+      <div class="ctl ctl-pend" id="pend">
+        <div class="pend-body"></div>
+        <div class="rod" id="rod"><div class="weight" id="weight"></div></div>
+        <div class="pend-pivot"></div>
+        <div class="pend-ctl">
+          <button class="mini js-minus" aria-label="Bajar tempo"><i class="fa-solid fa-minus"></i></button>
+          <button class="mini main js-play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
+          <button class="mini js-plus" aria-label="Subir tempo"><i class="fa-solid fa-plus"></i></button>
+        </div>
+        <p class="hint">Arrastra la pesa</p>
+      </div>
+
+      <!-- Orbe -->
+      <div class="ctl ctl-orb" id="orb">
+        <div class="orb-dots" id="orbDots"></div>
+        <div class="orb-core" id="orbCore">
+          <span class="orb-bpm" id="orbBpm">62</span>
+          <small>BPM</small>
+          <i class="fa-solid fa-play" id="orbIco"></i>
+        </div>
+        <p class="hint">Desliza arriba o abajo. Toca para iniciar</p>
+      </div>
+
+      <!-- Regla -->
+      <div class="ctl ctl-ruler" id="ruler">
+        <div class="ruler-view" id="rulerView">
+          <canvas id="rulerCv"></canvas>
+          <div class="needle"></div>
+        </div>
+        <div class="ruler-ctl">
+          <button class="round js-minus" aria-label="Bajar tempo"><i class="fa-solid fa-minus"></i></button>
+          <button class="round big js-play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
+          <button class="round js-plus" aria-label="Subir tempo"><i class="fa-solid fa-plus"></i></button>
+        </div>
+        <p class="hint">Desliza la regla</p>
+      </div>
+
     </div>
 
     <div class="bottom-row">
@@ -114,6 +161,6 @@
   </div>
 </div>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

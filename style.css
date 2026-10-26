@@ -233,3 +233,54 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   .hero { padding: 10px 14px 12px; }
   .tap, .tools button { height: 48px; }
 }
+
+/* ---------- Controles centrales ---------- */
+.ctl { display: none; position: relative; }
+[data-ctl="disco"] .ctl-disco, [data-ctl="orbe"] .ctl-orb { display: flex; }
+[data-ctl="pend"] .ctl-pend { display: block; }
+[data-ctl="regla"] .ctl-ruler { display: flex; }
+.ctl-disco { width: 100%; height: 100%; align-items: center; justify-content: center; }
+.hint { position: absolute; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--muted); margin: 0; pointer-events: none; }
+
+/* Péndulo */
+.ctl-pend { width: min(100cqw, 78cqh); height: 100cqh; touch-action: none; }
+.pend-body { position: absolute; left: 4%; right: 4%; bottom: 0; height: 76%; clip-path: polygon(27% 0, 73% 0, 100% 100%, 0 100%);
+  background: linear-gradient(90deg, rgba(255,255,255,.07), transparent 30%, transparent 70%, rgba(0,0,0,.18)), linear-gradient(160deg, var(--face-a), var(--face-b)); }
+.rod { position: absolute; left: 50%; bottom: 32%; width: 6px; height: 64%; margin-left: -3px; border-radius: 3px; transform-origin: 50% 100%;
+  background: linear-gradient(var(--accent), var(--accent2)); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent); }
+.weight { position: absolute; left: 50%; width: 36px; height: 26px; margin-left: -18px; bottom: 50%; border-radius: 8px;
+  background: linear-gradient(var(--face-a), var(--face-b)); border: 2px solid var(--accent); box-shadow: 0 4px 10px var(--shadow); }
+.pend-pivot { position: absolute; left: 50%; bottom: 32%; width: 20px; height: 20px; margin: 0 0 -10px -10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.pend-ctl { position: absolute; left: 14%; right: 14%; bottom: 3%; display: flex; align-items: center; justify-content: space-between; }
+.mini { width: 44px; height: 44px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); font-size: 15px; display: grid; place-items: center; }
+.mini.main { width: 58px; height: 58px; background: linear-gradient(145deg, var(--accent), var(--accent2)); color: var(--on-accent); font-size: 21px; border: 0; }
+.ctl-pend .hint { top: 0; text-align: left; }
+
+/* Orbe */
+.ctl-orb { width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); align-self: center; touch-action: none; }
+.orb-dots i { position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px; border-radius: 50%; background: var(--cell-off); border: 1px solid var(--border);
+  transform: rotate(var(--a)) translateY(-43cqmin) scale(var(--s)); transition: background .08s, box-shadow .08s; }
+.orb-dots i.on { background: var(--accent); box-shadow: 0 0 14px var(--accent); }
+.orb-core { position: absolute; left: 50%; top: 50%; width: 62%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--on-accent);
+  background: radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--accent) 65%, #fff), var(--accent2));
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 60px color-mix(in srgb, var(--accent) 45%, transparent); transition: scale .1s; }
+.orb-core.pulse { scale: 1.07; }
+.orb-bpm { font-size: clamp(44px, 18cqmin, 70px); font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.orb-core small { font-size: 12px; font-weight: 700; letter-spacing: .12em; opacity: .8; }
+.orb-core i { margin-top: 8px; font-size: 18px; opacity: .9; }
+.ctl-orb .hint { bottom: -2px; }
+
+/* Regla */
+.ctl-ruler { width: 100%; height: 100%; flex-direction: column; justify-content: center; align-items: center; gap: 18px; }
+.ruler-view { position: relative; width: 100%; height: min(44cqh, 130px); border-radius: 22px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; touch-action: none; }
+#rulerCv { position: absolute; inset: 0; width: 100%; height: 100%; }
+.needle { position: absolute; left: 50%; top: 0; bottom: 0; width: 3px; margin-left: -1.5px; background: var(--accent); box-shadow: 0 0 12px var(--accent); border-radius: 2px; }
+.ruler-ctl { display: flex; gap: 22px; align-items: center; }
+.round { width: 56px; height: 56px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); font-size: 18px; display: grid; place-items: center; }
+.round.big { width: 84px; height: 84px; background: linear-gradient(145deg, var(--accent), var(--accent2)); color: var(--on-accent); font-size: 30px; border: 0; box-shadow: 0 8px 22px var(--shadow); }
+.ctl-ruler .hint { position: static; }
+
+/* Temas: etiqueta del control */
+.swatch { flex-direction: column; justify-content: flex-end; align-items: flex-start; }
+.swatch small { display: block; font-weight: 500; opacity: .75; font-size: 11px; margin-top: 1px; }

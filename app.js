@@ -10,11 +10,21 @@ const store = {
 try { localStorage.removeItem("metro.pin"); } catch { /* sin almacenamiento */ }
 
 /* ---------- Catálogos ---------- */
+// Cada timbre se sintetiza: play(tiempo, nivel 0=fuerte 1=medio 2=débil, ganancia).
 const SOUNDS = {
-  click:  { name: "Clic",   type: "square",   f: [1900, 1400, 1050], d: 0.03 },
-  madera: { name: "Madera", type: "triangle", f: [950, 700, 520],    d: 0.055 },
-  bloque: { name: "Bloque", type: "sine",     f: [1250, 940, 720],   d: 0.09 },
-  suave:  { name: "Suave",  type: "sine",     f: [880, 660, 520],    d: 0.14 },
+  click:    { name: "Clic",     play: (t, i, g) => tone(t, "square", [1900, 1400, 1050][i], g * 0.7, 0.03) },
+  madera:   { name: "Madera",   play: (t, i, g) => tone(t, "triangle", [950, 700, 520][i], g * 0.9, 0.055) },
+  bloque:   { name: "Bloque",   play: (t, i, g) => tone(t, "sine", [1250, 940, 720][i], g * 0.9, 0.09) },
+  suave:    { name: "Suave",    play: (t, i, g) => tone(t, "sine", [880, 660, 520][i], g * 0.9, 0.14) },
+  digital:  { name: "Digital",  play: (t, i, g) => tone(t, "sine", [1000, 800, 620][i], g * 0.8, 0.06) },
+  gota:     { name: "Gota",     play: (t, i, g) => tone(t, "sine", [900, 800, 700][i], g, 0.09, [1800, 1600, 1400][i]) },
+  marimba:  { name: "Marimba",  play: (t, i, g) => { const f = [523, 440, 349][i]; tone(t, "sine", f, g, 0.18); tone(t, "sine", f * 4, g * 0.25, 0.05); } },
+  campana:  { name: "Campana",  play: (t, i, g) => { const f = [1320, 1100, 880][i]; tone(t, "sine", f, g * 0.6, 0.4); tone(t, "sine", f * 2.76, g * 0.3, 0.25); tone(t, "sine", f * 5.4, g * 0.15, 0.12); } },
+  cencerro: { name: "Cencerro", play: (t, i, g) => { const f = [800, 700, 600][i]; tone(t, "square", f, g * 0.28, 0.22); tone(t, "square", f * 0.675, g * 0.28, 0.22); } },
+  palillos: { name: "Palillos", play: (t, i, g) => { noiseBurst(t, g * 0.9, 0.025, "bandpass", [3500, 3000, 2600][i], 4); tone(t, "triangle", 1800, g * 0.4, 0.02); } },
+  hihat:    { name: "Hi-hat",   play: (t, i, g) => noiseBurst(t, g * 0.9, i === 0 ? 0.09 : 0.04, "highpass", 7000, 0.7) },
+  caja:     { name: "Caja",     play: (t, i, g) => { noiseBurst(t, g * 0.8, 0.12, "bandpass", 1800, 0.8); tone(t, "triangle", [220, 200, 180][i], g * 0.6, 0.08, 120); } },
+  bombo:    { name: "Bombo",    play: (t, i, g) => tone(t, "sine", [150, 130, 110][i], g * 1.4, 0.16, 45) },
 };
 // Cada patrón divide el pulso en "div" partes; hits marca cuáles suenan (0 = silencio).
 const PATTERNS = [
@@ -81,6 +91,17 @@ function applyTheme() {
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim();
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta && bg) meta.content = bg;
+  applyCtl();
+}
+// Control central por defecto de cada tema; el usuario puede fijar otro aparte.
+const CTL_BY_THEME = { medianoche: "disco", claro: "regla", grafito: "pend", aurora: "orbe", ambar: "pend", carmesi: "orbe" };
+const CTLS = [["tema", "Según el tema"], ["disco", "Disco"], ["pend", "Péndulo"], ["orbe", "Orbe"], ["regla", "Regla"]];
+const CTL_NAME = { disco: "Disco", pend: "Péndulo", orbe: "Orbe", regla: "Regla" };
+let ctlChoice = store.get("metro.ctl", "tema");
+function applyCtl() {
+  const id = ctlChoice === "tema" ? (CTL_BY_THEME[document.documentElement.dataset.theme] || "disco") : ctlChoice;
+  document.documentElement.dataset.ctl = id;
+  requestAnimationFrame(() => { if (id === "regla") drawRuler(); });
 }
 darkMQ.addEventListener && darkMQ.addEventListener("change", () => { if (themeChoice === "auto") applyTheme(); });
 
@@ -102,6 +123,9 @@ function renderBpm() {
   $("tempoName").textContent = tempoName(state.bpm);
   $("ring").style.transform = `rotate(${(state.bpm * 3) % 360}deg)`;
   $("prog").style.strokeDasharray = `${75 * ((state.bpm - 20) / 280)} 100`;
+  $("orbBpm").textContent = state.bpm;
+  $("weight").style.bottom = `${((300 - state.bpm) / 280) * 88}%`;
+  if (rulerPos === null && document.documentElement.dataset.ctl === "regla") drawRuler();
 }
 function renderAll() {
   renderBpm();
@@ -142,6 +166,7 @@ function renderPads() {
     }
     pads.appendChild(col);
   });
+  renderOrbDots();
 }
 function setBpm(v) {
   const n = clamp(Math.round(v), 20, 300);
@@ -177,10 +202,14 @@ function ensureAudio() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
+    // Limitador: permite subir mucho la ganancia sin distorsionar.
     const comp = ctx.createDynamicsCompressor();
-    master.connect(comp); comp.connect(ctx.destination);
+    comp.threshold.value = -8; comp.knee.value = 6; comp.ratio.value = 8; comp.attack.value = 0.001; comp.release.value = 0.1;
+    const makeup = ctx.createGain();
+    makeup.gain.value = 1.5;
+    master.connect(comp); comp.connect(makeup); makeup.connect(ctx.destination);
   }
-  master.gain.value = state.vol;
+  master.gain.value = volGain();
   try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* no disponible */ }
   if (!silentEl) {
     silentEl = new Audio(silentWav());
@@ -190,20 +219,36 @@ function ensureAudio() {
   silentEl.play().catch(() => {});
   if (ctx.state !== "running") ctx.resume();
 }
-function tone(time, type, freq, gain, dur) {
+function tone(time, type, freq, gain, dur, sweepTo) {
   const o = ctx.createOscillator(), e = ctx.createGain();
-  o.type = type; o.frequency.value = freq;
+  o.type = type; o.frequency.setValueAtTime(freq, time);
+  if (sweepTo) o.frequency.exponentialRampToValueAtTime(sweepTo, time + dur);
   e.gain.setValueAtTime(0.0001, time);
-  e.gain.exponentialRampToValueAtTime(gain, time + 0.002);
+  e.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), time + 0.002);
   e.gain.exponentialRampToValueAtTime(0.0001, time + dur);
   o.connect(e); e.connect(master);
   o.start(time); o.stop(time + dur + 0.02);
 }
+// El control va de 0 a 1; la ganancia real llega a 3x para que el 100 % suene fuerte.
+const volGain = () => state.vol * 3;
+let noiseBuf = null;
+function noiseBurst(time, gain, dur, ftype, freq, q) {
+  if (!noiseBuf) {
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), e = ctx.createGain();
+  s.buffer = noiseBuf; f.type = ftype; f.frequency.value = freq; f.Q.value = q || 1;
+  e.gain.setValueAtTime(0.0001, time);
+  e.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), time + 0.002);
+  e.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  s.connect(f); f.connect(e); e.connect(master);
+  s.start(time); s.stop(time + dur + 0.02);
+}
 function click(time, level) {
-  const s = SOUNDS[state.sound];
   const idx = level === 3 ? 0 : level === 2 ? 1 : 2;
-  const freq = level === "sub" ? s.f[2] * 0.85 : s.f[idx];
-  tone(time, s.type, freq, (GAIN[level] || 0.4) * (s.type === "square" ? 0.5 : 0.9), s.d);
+  (SOUNDS[state.sound] || SOUNDS.click).play(time, idx, GAIN[level] || 0.4);
 }
 function polyClick(time, first) {
   tone(time, "sine", first ? 1760 : 1320, first ? 0.55 : 0.38, 0.09);
@@ -244,6 +289,20 @@ function flash(i) {
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   const c = document.querySelector(`.col[data-i="${i}"]`);
   if (c) c.classList.add("beat");
+  document.querySelectorAll("#orbDots .on").forEach((d) => d.classList.remove("on"));
+  const od = $("orbDots").children[i];
+  if (od) od.classList.add("on");
+  const core = $("orbCore");
+  core.classList.add("pulse");
+  setTimeout(() => core.classList.remove("pulse"), 90);
+  swingPhase = swingBeat++;
+}
+function setPlayUI(on) {
+  document.querySelectorAll(".js-play").forEach((b) => {
+    b.classList.toggle("running", on);
+    b.innerHTML = `<i class="fa-solid fa-${on ? "pause" : "play"}"></i>`;
+  });
+  $("orbIco").className = `fa-solid fa-${on ? "pause" : "play"}`;
 }
 function flashPoly(i) {
   const dots = $("polyDots").children;
@@ -259,8 +318,8 @@ function start() {
   polyNext = nextTime;
   timerId = setInterval(scheduler, 25);
   scheduler();
-  $("play").classList.add("running");
-  $("play").innerHTML = '<i class="fa-solid fa-pause"></i>';
+  swingBeat = 0; swingPhase = 0;
+  setPlayUI(true);
   requestAnimationFrame(visLoop);
 }
 function stop() {
@@ -271,8 +330,8 @@ function stop() {
   if (silentEl && !tRunning) silentEl.pause();
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   document.querySelectorAll("#polyDots .on").forEach((c) => c.classList.remove("on"));
-  $("play").classList.remove("running");
-  $("play").innerHTML = '<i class="fa-solid fa-play"></i>';
+  document.querySelectorAll("#orbDots .on").forEach((c) => c.classList.remove("on"));
+  setPlayUI(false);
   $("status").innerHTML = "&nbsp;";
 }
 
@@ -313,9 +372,10 @@ function holdRepeat(el, delta) {
   });
   ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => el.addEventListener(ev, stopH));
 }
-holdRepeat($("minus"), -1);
-holdRepeat($("plus"), 1);
-$("play").addEventListener("click", () => (running ? stop() : start()));
+document.querySelectorAll(".js-minus").forEach((b) => holdRepeat(b, -1));
+document.querySelectorAll(".js-plus").forEach((b) => holdRepeat(b, 1));
+const togglePlay = () => (running ? stop() : start());
+document.querySelectorAll(".js-play").forEach((b) => b.addEventListener("click", togglePlay));
 
 let taps = [];
 $("tapBtn").addEventListener("click", () => {
@@ -461,7 +521,10 @@ $("btnSound").addEventListener("click", () => {
   sheet("Sonido", (b) => {
     b.appendChild(chips(Object.entries(SOUNDS).map(([k, v]) => [k, v.name]), state.sound, (v) => {
       state.sound = v; persist();
-      if (ctx) click(ctx.currentTime + 0.02, 3);
+      ensureAudio();
+      click(ctx.currentTime + 0.02, 3);
+      click(ctx.currentTime + 0.42, 2);
+      setTimeout(() => { if (!running && !tRunning && silentEl) silentEl.pause(); }, 900);
     }));
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
@@ -469,7 +532,7 @@ $("btnVol").addEventListener("click", () => {
   sheet("Volumen", (b) => {
     const r = document.createElement("input");
     r.type = "range"; r.min = 0; r.max = 1; r.step = 0.01; r.value = state.vol;
-    r.oninput = () => { state.vol = +r.value; if (master) master.gain.value = state.vol; persist(); };
+    r.oninput = () => { state.vol = +r.value; if (master) master.gain.value = volGain(); persist(); };
     b.appendChild(r);
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
@@ -493,7 +556,8 @@ $("btnTheme").addEventListener("click", () => {
       const s = document.createElement("button");
       s.className = "swatch" + (id === "auto" ? " auto" : "") + (id === themeChoice ? " sel" : "");
       if (id !== "auto") s.dataset.theme = id;
-      s.innerHTML = `<span>${name}</span>`;
+      const ctlFor = id === "auto" ? "Disco o regla" : CTL_NAME[CTL_BY_THEME[id]];
+      s.innerHTML = `<span>${name}</span><small>${ctlFor}</small>`;
       s.onclick = () => {
         themeChoice = id; store.set("metro.theme", id); applyTheme();
         g.querySelectorAll(".swatch").forEach((x) => x.classList.remove("sel"));
@@ -502,6 +566,9 @@ $("btnTheme").addEventListener("click", () => {
       g.appendChild(s);
     });
     b.appendChild(g);
+    b.appendChild(h3("Control central"));
+    b.appendChild(chips(CTLS, ctlChoice, (v) => { ctlChoice = v; store.set("metro.ctl", v); applyCtl(); }));
+    b.insertAdjacentHTML("beforeend", '<p class="note">"Según el tema" usa el control propio de cada tema; los demás lo fijan para todos.</p>');
     b.insertAdjacentHTML("beforeend",
       '<div class="credit"><span>Desarrollado por</span><img class="logo-dark" src="img/lpsolutions-blanco.webp" alt="LPSOLUTIONS"><img class="logo-light" src="img/lpsolutions-negro.webp" alt="LPSOLUTIONS"></div>');
   }, [{ label: "Listo", cls: "primary", value: true }]);
@@ -731,6 +798,119 @@ function editPractice(existing) {
   });
 }
 $("addPractice").addEventListener("click", () => editPractice(null));
+
+/* ---------- Controles centrales alternativos ---------- */
+// Orbe: puntos del compás alrededor y arrastre vertical para el tempo.
+function renderOrbDots() {
+  const box = $("orbDots");
+  box.innerHTML = state.levels.map((lv, i) =>
+    `<i style="--a:${(360 * i) / state.num}deg;--s:${[0.5, 0.9, 1.2, 1.6][lv]}"></i>`).join("");
+}
+(function setupOrb() {
+  const orb = $("orb");
+  let y0 = 0, bpm0 = 0, moved = 0, active = false;
+  orb.addEventListener("pointerdown", (e) => { active = true; y0 = e.clientY; bpm0 = state.bpm; moved = 0; orb.setPointerCapture(e.pointerId); });
+  orb.addEventListener("pointermove", (e) => {
+    if (!active) return;
+    moved = Math.max(moved, Math.abs(e.clientY - y0));
+    if (moved > 6) setBpm(bpm0 + (y0 - e.clientY) * 0.45);
+  });
+  const end = () => { if (active && moved <= 6) togglePlay(); active = false; };
+  orb.addEventListener("pointerup", end);
+  orb.addEventListener("pointercancel", () => { active = false; });
+})();
+
+// Regla: marcas de 1 BPM que se deslizan bajo una aguja fija, con inercia.
+let rulerPos = null;
+const RULER_PX = 11;
+function drawRuler() {
+  const cv = $("rulerCv"), view = $("rulerView");
+  const r = view.getBoundingClientRect();
+  if (!r.width) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) {
+    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, r.width, r.height);
+  const cs = getComputedStyle(document.documentElement);
+  const tick = cs.getPropertyValue("--muted").trim() || "#999", txt = cs.getPropertyValue("--text").trim() || "#fff";
+  const pos = rulerPos === null ? state.bpm : rulerPos, cx = r.width / 2;
+  g.textAlign = "center"; g.font = "600 12px -apple-system, sans-serif";
+  for (let b = Math.floor(pos - cx / RULER_PX) - 1; b <= Math.ceil(pos + cx / RULER_PX) + 1; b++) {
+    if (b < 20 || b > 300) continue;
+    const x = cx + (b - pos) * RULER_PX, major = b % 10 === 0, mid = b % 5 === 0;
+    const h = r.height * (major ? 0.5 : mid ? 0.36 : 0.22);
+    g.strokeStyle = major ? txt : tick; g.globalAlpha = major ? 0.9 : 0.55; g.lineWidth = major ? 2 : 1.2;
+    g.beginPath(); g.moveTo(x, r.height); g.lineTo(x, r.height - h); g.stroke();
+    if (major) { g.globalAlpha = 0.85; g.fillStyle = txt; g.fillText(String(b), x, r.height - h - 8); }
+  }
+  g.globalAlpha = 1;
+}
+(function setupRuler() {
+  const view = $("rulerView");
+  let x0 = 0, p0 = 0, lastX = 0, lastT = 0, vel = 0, drag = false, raf = 0;
+  const apply = (p) => { rulerPos = clamp(p, 20, 300); setBpm(rulerPos); drawRuler(); };
+  view.addEventListener("pointerdown", (e) => {
+    cancelAnimationFrame(raf);
+    drag = true; x0 = lastX = e.clientX; lastT = performance.now(); vel = 0; p0 = rulerPos === null ? state.bpm : rulerPos;
+    view.setPointerCapture(e.pointerId);
+  });
+  view.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const now = performance.now();
+    vel = clamp((e.clientX - lastX) / Math.max(1, now - lastT), -2.5, 2.5);
+    lastX = e.clientX; lastT = now;
+    apply(p0 - (e.clientX - x0) / RULER_PX);
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = false;
+    const step = () => {
+      if (Math.abs(vel) < 0.02) { rulerPos = null; drawRuler(); return; }
+      apply((rulerPos === null ? state.bpm : rulerPos) - (vel * 16) / RULER_PX);
+      vel *= 0.94;
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+  };
+  view.addEventListener("pointerup", end);
+  view.addEventListener("pointercancel", end);
+  if (window.ResizeObserver) new ResizeObserver(() => drawRuler()).observe(view);
+})();
+
+// Péndulo: la varilla oscila con el pulso y la pesa se arrastra para cambiar el tempo.
+let swingPhase = 0, swingBeat = 0, swingAngle = 0, swingLast = performance.now();
+const SWING_MAX = 26;
+function pendLoop(now) {
+  requestAnimationFrame(pendLoop);
+  const dt = (now - swingLast) / 1000;
+  swingLast = now;
+  if (document.documentElement.dataset.ctl !== "pend") return;
+  if (running) {
+    swingPhase += (dt * state.bpm) / 60;
+    swingAngle = SWING_MAX * Math.cos(Math.PI * swingPhase);
+  } else swingAngle *= 0.88;
+  $("rod").style.transform = `rotate(${swingAngle.toFixed(2)}deg)`;
+}
+requestAnimationFrame(pendLoop);
+(function setupPend() {
+  const pend = $("pend");
+  let active = false;
+  const setFrom = (e) => {
+    const r = pend.getBoundingClientRect(), base = r.bottom - r.height * 0.32, len = r.height * 0.64;
+    const frac = clamp((base - e.clientY) / len / 0.88, 0, 1);
+    setBpm(300 - frac * 280);
+  };
+  pend.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    active = true; pend.setPointerCapture(e.pointerId); setFrom(e);
+  });
+  pend.addEventListener("pointermove", (e) => { if (active) setFrom(e); });
+  pend.addEventListener("pointerup", () => { active = false; });
+  pend.addEventListener("pointercancel", () => { active = false; });
+})();
 
 /* ---------- Arranque ---------- */
 applyTheme();

@@ -1,8 +1,9 @@
-const CACHE = "metronomo-v3";
+const CACHE = "metronomo-v4";
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "manifest.webmanifest",
   "vendor/css/fontawesome.min.css", "vendor/css/solid.min.css", "vendor/webfonts/fa-solid-900.woff2",
   "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png",
+  "img/lpsolutions-blanco.webp", "img/lpsolutions-negro.webp",
 ];
 
 self.addEventListener("install", (e) => {

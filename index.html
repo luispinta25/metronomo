@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-theme="medianoche">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#1a1238">
+<meta name="theme-color" content="#070b1f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,79 +13,79 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <title>Metrónomo</title>
+<script>
+// Aplica el tema antes de pintar para evitar parpadeos.
+(function () {
+  try {
+    var c = JSON.parse(localStorage.getItem("metro.theme") || '"auto"');
+    var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = c === "auto" ? (dark ? "medianoche" : "claro") : c;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
+<div class="scrim"></div>
+<div class="app">
 
-<div class="lock" id="lock" hidden>
-  <div class="lock-card">
-    <i class="fa-solid fa-lock lock-ico"></i>
-    <h1 id="lockTitle">Ingresa tu clave</h1>
-    <p id="lockHint" class="lock-hint"></p>
-    <div class="dots" id="lockDots"></div>
-    <div class="keypad" id="keypad">
-      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
-      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
-      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
-      <span></span><button data-k="0">0</button>
-      <button data-k="del" aria-label="Borrar"><i class="fa-solid fa-delete-left"></i></button>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo logo-dark" src="img/lpsolutions-blanco.webp" alt="LPSOLUTIONS">
+      <img class="logo logo-light" src="img/lpsolutions-negro.webp" alt="LPSOLUTIONS">
     </div>
-  </div>
-</div>
-
-<div class="app" id="app" hidden>
+    <button class="icon-btn" id="btnTheme" aria-label="Tema"><i class="fa-solid fa-palette"></i></button>
+  </header>
 
   <main id="viewMetro" class="view active">
-    <section class="lcd">
-      <div class="lcd-head">
-        <span class="tag tag-tempo">TEMPO (BPM)</span>
-        <span class="tag tag-sig">Compás</span>
-        <span class="tag tag-sub">Subdiv.</span>
+    <section class="card hero">
+      <div class="hero-top">
+        <button class="bpm" id="tempoBtn" aria-label="Cambiar tempo">
+          <span id="bpmNum">62</span><small>BPM</small>
+        </button>
+        <span id="tempoName" class="tname">Adagio</span>
       </div>
-      <div class="lcd-row">
-        <button class="lcd-tempo" id="tempoBtn" aria-label="Cambiar tempo">
-          <span id="beatUnit" class="note-ico"></span>
-          <span id="tempoDigits" class="seg"></span>
-          <span id="tempoName" class="tempo-name">Adagio</span>
-        </button>
-        <button class="lcd-sig" id="sigDisplay" aria-label="Compás">
-          <span id="sigDigits" class="seg"></span>
-        </button>
-        <button class="lcd-sub" id="subBtn" aria-label="Subdivisión">
-          <span id="subIco" class="note-ico"></span>
-        </button>
+      <div class="chips-row">
+        <button class="chip" id="sigBtn"><i class="fa-solid fa-music"></i><span id="sigTxt">4/4</span></button>
+        <button class="chip" id="subBtn"><span id="subVis" class="pv"></span><span id="subTxt">Negra</span></button>
+        <button class="chip" id="polyChip" hidden><i class="fa-solid fa-layer-group"></i><span id="polyTxt">3:4</span></button>
       </div>
       <div class="pads" id="pads"></div>
+      <div class="poly-dots" id="polyDots" hidden></div>
     </section>
-
-    <div class="toolbar">
-      <button id="btnSound" aria-label="Sonido"><i class="fa-solid fa-screwdriver-wrench"></i></button>
-      <button id="btnTimer" aria-label="Temporizador"><i class="fa-solid fa-stopwatch"></i></button>
-      <button id="btnVol" aria-label="Volumen"><i class="fa-solid fa-volume-high"></i></button>
-      <button id="btnAwake" aria-label="Pantalla encendida"><i class="fa-solid fa-mobile-screen"></i></button>
-    </div>
     <div class="status" id="status">&nbsp;</div>
 
     <div class="dial-wrap">
       <div class="dial" id="dial">
-        <div class="ring" id="ring"></div>
-        <div class="face"></div>
+        <svg class="prog" viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="track" cx="50" cy="50" r="47" pathLength="100"></circle>
+          <circle class="val" id="prog" cx="50" cy="50" r="47" pathLength="100"></circle>
+        </svg>
+        <div class="knob">
+          <div class="ring" id="ring"></div>
+          <div class="face"></div>
+        </div>
         <button class="arrow left" id="minus" aria-label="Bajar tempo"><i class="fa-solid fa-chevron-left"></i></button>
         <button class="arrow right" id="plus" aria-label="Subir tempo"><i class="fa-solid fa-chevron-right"></i></button>
         <button class="play" id="play" aria-label="Iniciar o detener"><i class="fa-solid fa-play"></i></button>
       </div>
     </div>
 
-    <div class="bottom-btns">
-      <button class="big" id="sigBtn">4/4</button>
-      <button class="big" id="tapBtn">TAP</button>
+    <div class="bottom-row">
+      <button class="tap" id="tapBtn">TAP</button>
+      <div class="tools">
+        <button id="btnSound" aria-label="Sonido"><i class="fa-solid fa-sliders"></i></button>
+        <button id="btnTimer" aria-label="Temporizador"><i class="fa-solid fa-stopwatch"></i></button>
+        <button id="btnVol" aria-label="Volumen"><i class="fa-solid fa-volume-high"></i></button>
+        <button id="btnAwake" aria-label="Pantalla encendida"><i class="fa-solid fa-mobile-screen"></i></button>
+      </div>
     </div>
   </main>
 
   <main id="viewSongs" class="view">
     <h1 class="page-title">Repertorio</h1>
-    <button class="big wide" id="saveCur"><i class="fa-solid fa-plus"></i> Guardar ajuste actual</button>
+    <button class="btn-wide" id="saveCur"><i class="fa-solid fa-plus"></i> Guardar ajuste actual</button>
     <ul class="songs" id="songList"></ul>
     <p class="empty" id="songEmpty">Todavía no hay ajustes guardados.</p>
   </main>
@@ -114,6 +114,6 @@
   </div>
 </div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

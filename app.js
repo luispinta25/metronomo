@@ -7,24 +7,58 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
 };
+try { localStorage.removeItem("metro.pin"); } catch { /* sin almacenamiento */ }
 
-/* ---------- Estado ---------- */
+/* ---------- Catálogos ---------- */
 const SOUNDS = {
-  click:  { name: "Clic",    type: "square",   f: [1900, 1400, 1050], d: 0.03 },
-  madera: { name: "Madera",  type: "triangle", f: [950, 700, 520],    d: 0.055 },
-  bloque: { name: "Bloque",  type: "sine",     f: [1250, 940, 720],   d: 0.09 },
-  suave:  { name: "Suave",   type: "sine",     f: [880, 660, 520],    d: 0.14 },
+  click:  { name: "Clic",   type: "square",   f: [1900, 1400, 1050], d: 0.03 },
+  madera: { name: "Madera", type: "triangle", f: [950, 700, 520],    d: 0.055 },
+  bloque: { name: "Bloque", type: "sine",     f: [1250, 940, 720],   d: 0.09 },
+  suave:  { name: "Suave",  type: "sine",     f: [880, 660, 520],    d: 0.14 },
 };
-const SUBDIVS = [
-  { n: 1, name: "Negra" }, { n: 2, name: "Corcheas" }, { n: 3, name: "Tresillo" }, { n: 4, name: "Semicorcheas" },
+// Cada patrón divide el pulso en "div" partes; hits marca cuáles suenan (0 = silencio).
+const PATTERNS = [
+  { id: "negra", name: "Negra", div: 1, hits: [1] },
+  { id: "corcheas", name: "Corcheas", div: 2, hits: [1, 1] },
+  { id: "contratiempo", name: "Contratiempo", div: 2, hits: [0, 1] },
+  { id: "tresillo", name: "Tresillo", div: 3, hits: [1, 1, 1] },
+  { id: "swing", name: "Swing", div: 3, hits: [1, 0, 1] },
+  { id: "tres-sin1", name: "Tresillo sin 1.º", div: 3, hits: [0, 1, 1] },
+  { id: "tres-sin3", name: "Tresillo sin 3.º", div: 3, hits: [1, 1, 0] },
+  { id: "semis", name: "Semicorcheas", div: 4, hits: [1, 1, 1, 1] },
+  { id: "semis-contra", name: "Semis contratiempo", div: 4, hits: [0, 1, 0, 1] },
+  { id: "corchea-2semis", name: "Corchea + 2 semis", div: 4, hits: [1, 0, 1, 1] },
+  { id: "2semis-corchea", name: "2 semis + corchea", div: 4, hits: [1, 1, 1, 0] },
+  { id: "puntillo-semi", name: "Puntillo + semi", div: 4, hits: [1, 0, 0, 1] },
+  { id: "semi-puntillo", name: "Semi + puntillo", div: 4, hits: [1, 1, 0, 0] },
+  { id: "quintillo", name: "Quintillo", div: 5, hits: [1, 1, 1, 1, 1] },
+  { id: "seisillo", name: "Seisillo", div: 6, hits: [1, 1, 1, 1, 1, 1] },
+  { id: "septillo", name: "Septillo", div: 7, hits: [1, 1, 1, 1, 1, 1, 1] },
+  { id: "fusas", name: "Fusas", div: 8, hits: [1, 1, 1, 1, 1, 1, 1, 1] },
 ];
+const OLD_SUB = { 1: "negra", 2: "corcheas", 3: "tresillo", 4: "semis" };
+const patOf = (id) => PATTERNS.find((p) => p.id === id) || PATTERNS[0];
+
+const COMMON_SIGS = [[2, 4], [3, 4], [4, 4], [5, 4], [7, 4], [3, 8], [5, 8], [6, 8], [7, 8], [9, 8], [11, 8], [12, 8], [2, 2], [3, 2]];
+const GROUPS = {
+  5: [[3, 2], [2, 3]], 6: [[3, 3], [2, 2, 2]], 7: [[2, 2, 3], [3, 2, 2], [2, 3, 2], [4, 3], [3, 4]],
+  8: [[3, 3, 2], [2, 3, 3], [4, 4], [2, 2, 2, 2]], 9: [[3, 3, 3], [2, 2, 2, 3]], 10: [[3, 3, 2, 2], [5, 5], [2, 2, 3, 3]],
+  11: [[3, 3, 3, 2], [3, 3, 2, 3], [2, 3, 3, 3]], 12: [[3, 3, 3, 3], [4, 4, 4], [2, 2, 2, 2, 2, 2]],
+  13: [[3, 3, 3, 4], [4, 3, 3, 3]], 14: [[3, 3, 4, 4], [2, 2, 2, 2, 2, 2, 2]], 15: [[3, 3, 3, 3, 3], [5, 5, 5]],
+  16: [[4, 4, 4, 4], [3, 3, 3, 3, 4]],
+};
+const groupLevels = (g) => g.flatMap((len, gi) => Array.from({ length: len }, (_, i) => (i === 0 ? (gi === 0 ? 3 : 2) : 1)));
 const GAIN = { 3: 1, 2: 0.6, 1: 0.32, sub: 0.16 };
 
+/* ---------- Estado ---------- */
 const saved = store.get("metro.state", {});
 const state = Object.assign({
-  bpm: 62, num: 4, den: 4, sub: 1, sound: "click", vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
-  tStart: false, tStop: true, tRepeat: false,
+  bpm: 62, num: 4, den: 4, pat: "negra", sound: "click", vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
+  tStart: false, tStop: true, tRepeat: false, polyOn: false, polyN: 3, group: null,
 }, saved);
+if (saved.sub && !saved.pat) state.pat = OLD_SUB[saved.sub] || "negra";
+delete state.sub;
+state.num = clamp(state.num, 1, 16);
 state.levels = normalizeLevels(state.levels, state.num);
 state.timerMin = clamp(state.timerMin || 30, 1, 180);
 let songs = store.get("metro.songs", []);
@@ -35,57 +69,23 @@ function normalizeLevels(lv, n) {
   for (let i = 0; i < n; i++) out.push(lv && lv[i] !== undefined ? lv[i] : (i === 0 ? 3 : 2));
   return out;
 }
+const songPat = (s) => s.pat || OLD_SUB[s.sub] || "negra";
 
-/* ---------- Dibujo: 7 segmentos y notas ---------- */
-const SEG_MAP = {
-  0: "abcdef", 1: "bc", 2: "abdeg", 3: "abcdg", 4: "bcfg", 5: "acdfg", 6: "acdefg", 7: "abc", 8: "abcdefg", 9: "abcdfg",
-};
-const SEG_RECT = {
-  a: [6, 0, 22, 5], b: [29, 5, 5, 25], c: [29, 36, 5, 25], d: [6, 61, 22, 5], e: [0, 36, 5, 25], f: [0, 5, 5, 25], g: [6, 30.5, 22, 5],
-};
-function segSVG(text) {
-  let x = 0, out = "";
-  for (const ch of String(text)) {
-    if (ch === "/") {
-      out += `<polygon points="${x + 22},0 ${x + 28},0 ${x + 6},66 ${x},66" fill="#2fd0ec"/>`;
-      x += 26;
-      continue;
-    }
-    const on = SEG_MAP[ch] || "";
-    for (const s in SEG_RECT) {
-      const [rx, ry, w, h] = SEG_RECT[s];
-      out += `<rect x="${x + rx}" y="${ry}" width="${w}" height="${h}" rx="2" fill="#2fd0ec" opacity="${on.includes(s) ? 1 : 0.07}"/>`;
-    }
-    x += 44;
-  }
-  return `<svg viewBox="0 0 ${x} 66" xmlns="http://www.w3.org/2000/svg"><g transform="skewX(-7) translate(4 0)">${out}</g></svg>`;
+/* ---------- Temas ---------- */
+const THEMES = [["auto", "Automático"], ["medianoche", "Medianoche"], ["claro", "Claro"], ["grafito", "Grafito"], ["aurora", "Aurora"], ["ambar", "Ámbar"], ["carmesi", "Carmesí"]];
+let themeChoice = store.get("metro.theme", "auto");
+const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
+function applyTheme() {
+  const id = themeChoice === "auto" ? (darkMQ.matches ? "medianoche" : "claro") : themeChoice;
+  document.documentElement.dataset.theme = id;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim();
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta && bg) meta.content = bg;
 }
-function noteSVG(kind) {
-  const c = "#2fd0ec";
-  const head = (cx, cy, hollow) =>
-    `<ellipse cx="${cx}" cy="${cy}" rx="7" ry="5.2" transform="rotate(-20 ${cx} ${cy})" fill="${hollow ? "none" : c}" stroke="${c}" stroke-width="2"/>`;
-  const stem = (x, y1, y2) => `<rect x="${x - 1.2}" y="${y1}" width="2.4" height="${y2 - y1}" fill="${c}"/>`;
-  let body = "", w = 28;
-  if (kind === "half") body = head(10, 40, true) + stem(16.3, 6, 40);
-  else if (kind === "eighth1") body = head(10, 40, false) + stem(16.3, 6, 40) + `<path d="M17 6 C 24 12 28 20 22 30 C 25 20 21 16 17 14Z" fill="${c}"/>`;
-  else if (kind === "sixteenth1") body = head(10, 40, false) + stem(16.3, 6, 40) +
-    `<path d="M17 6 C 24 11 28 17 22 25 C 25 17 21 14 17 12Z" fill="${c}"/><path d="M17 15 C 24 20 28 26 22 34 C 25 26 21 23 17 21Z" fill="${c}"/>`;
-  else if (kind === "pair" || kind === "quad") {
-    w = 52;
-    body = head(10, 40, false) + head(36, 40, false) + stem(16.3, 8, 40) + stem(42.3, 8, 40) +
-      `<rect x="15" y="6" width="28.5" height="5.5" fill="${c}"/>` + (kind === "quad" ? `<rect x="15" y="15" width="28.5" height="5" fill="${c}"/>` : "");
-  } else if (kind === "triplet") {
-    w = 74;
-    body = head(10, 42, false) + head(36, 42, false) + head(62, 42, false) +
-      stem(16.3, 12, 42) + stem(42.3, 12, 42) + stem(68.3, 12, 42) + `<rect x="15" y="10" width="54.5" height="5.5" fill="${c}"/>` +
-      `<text x="42" y="7" text-anchor="middle" font-size="12" font-family="-apple-system, sans-serif" font-weight="700" fill="${c}">3</text>`;
-  } else body = head(10, 40, false) + stem(16.3, 6, 40);
-  return `<svg viewBox="0 0 ${w} 52" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
-}
-const subKind = () => ["quarter", "pair", "triplet", "quad"][state.sub - 1];
-const unitKind = () => ({ 2: "half", 4: "quarter", 8: "eighth1", 16: "sixteenth1" })[state.den] || "quarter";
+darkMQ.addEventListener && darkMQ.addEventListener("change", () => { if (themeChoice === "auto") applyTheme(); });
 
-/* ---------- Nombre del tempo ---------- */
+/* ---------- Render ---------- */
+const pvHTML = (p) => p.hits.map((h) => `<i class="${h ? "h" : ""}"></i>`).join("");
 function tempoName(b) {
   if (b < 40) return "Grave";
   if (b < 60) return "Largo";
@@ -97,20 +97,29 @@ function tempoName(b) {
   if (b < 200) return "Presto";
   return "Prestissimo";
 }
-
-/* ---------- Render ---------- */
-function renderAll() {
-  $("tempoDigits").innerHTML = segSVG(String(state.bpm).padStart(state.bpm > 99 ? 3 : 2, " ").trim());
+function renderBpm() {
+  $("bpmNum").textContent = state.bpm;
   $("tempoName").textContent = tempoName(state.bpm);
-  $("sigDigits").innerHTML = segSVG(`${state.num}/${state.den}`);
-  $("sigBtn").textContent = `${state.num}/${state.den}`;
-  $("beatUnit").innerHTML = noteSVG(unitKind());
-  $("subIco").innerHTML = noteSVG(subKind());
   $("ring").style.transform = `rotate(${(state.bpm * 3) % 360}deg)`;
+  $("prog").style.strokeDasharray = `${75 * ((state.bpm - 20) / 280)} 100`;
+}
+function renderAll() {
+  renderBpm();
+  const p = patOf(state.pat);
+  $("sigTxt").textContent = `${state.num}/${state.den}`;
+  $("subVis").innerHTML = pvHTML(p);
+  $("subTxt").textContent = p.name;
+  $("polyChip").hidden = !state.polyOn;
+  $("polyTxt").textContent = `${state.polyN} contra ${state.num}`;
+  renderPolyDots();
   renderPads();
-  document.querySelectorAll(".toolbar button").forEach((b) => b.classList.remove("active"));
   timerRender();
   if (wakeLock) $("btnAwake").classList.add("active");
+}
+function renderPolyDots() {
+  const box = $("polyDots");
+  box.hidden = !state.polyOn;
+  box.innerHTML = state.polyOn ? "<i></i>".repeat(state.polyN) : "";
 }
 function renderPads() {
   const pads = $("pads");
@@ -125,6 +134,7 @@ function renderPads() {
       c.setAttribute("aria-label", `Tiempo ${i + 1}, nivel ${row}`);
       c.addEventListener("click", () => {
         state.levels[i] = state.levels[i] === row ? row - 1 : row;
+        state.group = null;
         persist();
         renderPads();
       });
@@ -137,13 +147,11 @@ function setBpm(v) {
   const n = clamp(Math.round(v), 20, 300);
   if (n === state.bpm) return;
   state.bpm = n;
-  $("tempoDigits").innerHTML = segSVG(String(n));
-  $("tempoName").textContent = tempoName(n);
-  $("ring").style.transform = `rotate(${(n * 3) % 360}deg)`;
+  renderBpm();
   persist();
 }
 function setSignature(num, den) {
-  state.num = clamp(num, 1, 12);
+  state.num = clamp(num, 1, 16);
   state.den = den;
   state.levels = normalizeLevels(state.levels, state.num);
   beatIdx = 0;
@@ -153,7 +161,8 @@ function setSignature(num, den) {
 
 /* ---------- Audio ---------- */
 let ctx = null, master = null, silentEl = null;
-let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], startedAt = 0;
+let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], polyQueue = [];
+let polyNext = 0, polyIdx = 0;
 
 function silentWav() {
   const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -181,37 +190,54 @@ function ensureAudio() {
   silentEl.play().catch(() => {});
   if (ctx.state !== "running") ctx.resume();
 }
+function tone(time, type, freq, gain, dur) {
+  const o = ctx.createOscillator(), e = ctx.createGain();
+  o.type = type; o.frequency.value = freq;
+  e.gain.setValueAtTime(0.0001, time);
+  e.gain.exponentialRampToValueAtTime(gain, time + 0.002);
+  e.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  o.connect(e); e.connect(master);
+  o.start(time); o.stop(time + dur + 0.02);
+}
 function click(time, level) {
   const s = SOUNDS[state.sound];
   const idx = level === 3 ? 0 : level === 2 ? 1 : 2;
   const freq = level === "sub" ? s.f[2] * 0.85 : s.f[idx];
-  const g = (GAIN[level] || 0.4);
-  const o = ctx.createOscillator(), e = ctx.createGain();
-  o.type = s.type; o.frequency.value = freq;
-  e.gain.setValueAtTime(0.0001, time);
-  e.gain.exponentialRampToValueAtTime(g * (s.type === "square" ? 0.5 : 0.9), time + 0.002);
-  e.gain.exponentialRampToValueAtTime(0.0001, time + s.d);
-  o.connect(e); e.connect(master);
-  o.start(time); o.stop(time + s.d + 0.02);
+  tone(time, s.type, freq, (GAIN[level] || 0.4) * (s.type === "square" ? 0.5 : 0.9), s.d);
+}
+function polyClick(time, first) {
+  tone(time, "sine", first ? 1760 : 1320, first ? 0.55 : 0.38, 0.09);
 }
 function scheduler() {
-  const step = 60 / state.bpm / state.sub;
+  const p = patOf(state.pat), beatDur = 60 / state.bpm, step = beatDur / p.div;
   while (nextTime < ctx.currentTime + 0.12) {
     if (beatIdx >= state.num) beatIdx = 0;
+    if (subIdx >= p.div) subIdx = 0;
     if (subIdx === 0) {
       const lv = state.levels[beatIdx];
-      if (lv > 0) click(nextTime, lv);
+      if (p.hits[0] && lv > 0) click(nextTime, lv);
       visQueue.push({ t: nextTime, beat: beatIdx });
-    } else {
+    } else if (p.hits[subIdx]) {
       click(nextTime, "sub");
     }
     nextTime += step;
-    if (++subIdx >= state.sub) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; }
+    if (++subIdx >= p.div) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; }
+  }
+  if (state.polyOn) {
+    const pd = (beatDur * state.num) / state.polyN;
+    while (polyNext < ctx.currentTime + 0.12) {
+      if (polyIdx >= state.polyN) polyIdx = 0;
+      polyClick(polyNext, polyIdx === 0);
+      polyQueue.push({ t: polyNext, i: polyIdx });
+      polyNext += pd;
+      polyIdx = (polyIdx + 1) % state.polyN;
+    }
   }
 }
 function visLoop() {
   if (!running) return;
   while (visQueue.length && visQueue[0].t <= ctx.currentTime) flash(visQueue.shift().beat);
+  while (polyQueue.length && polyQueue[0].t <= ctx.currentTime) flashPoly(polyQueue.shift().i);
   requestAnimationFrame(visLoop);
 }
 function flash(i) {
@@ -219,13 +245,18 @@ function flash(i) {
   const c = document.querySelector(`.col[data-i="${i}"]`);
   if (c) c.classList.add("beat");
 }
+function flashPoly(i) {
+  const dots = $("polyDots").children;
+  for (const d of dots) d.classList.remove("on");
+  if (dots[i]) dots[i].classList.add("on");
+}
 function start() {
   if (running) return;
   ensureAudio();
   running = true;
-  beatIdx = 0; subIdx = 0; visQueue = [];
+  beatIdx = 0; subIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
   nextTime = ctx.currentTime + 0.08;
-  startedAt = performance.now();
+  polyNext = nextTime;
   timerId = setInterval(scheduler, 25);
   scheduler();
   $("play").classList.add("running");
@@ -239,12 +270,13 @@ function stop() {
   if (run) { clearInterval(runId); run = null; }
   if (silentEl && !tRunning) silentEl.pause();
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
+  document.querySelectorAll("#polyDots .on").forEach((c) => c.classList.remove("on"));
   $("play").classList.remove("running");
   $("play").innerHTML = '<i class="fa-solid fa-play"></i>';
   $("status").innerHTML = "&nbsp;";
 }
 
-/* ---------- Diales y botones ---------- */
+/* ---------- Dial y botones ---------- */
 (function setupDial() {
   const dial = $("dial");
   let last = null, acc = 0, start0 = 0;
@@ -291,16 +323,8 @@ $("tapBtn").addEventListener("click", () => {
   if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];
   taps.push(now);
   taps = taps.slice(-7);
-  if (taps.length >= 2) {
-    const iv = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
-    setBpm(60000 / iv);
-  }
+  if (taps.length >= 2) setBpm(60000 / ((taps[taps.length - 1] - taps[0]) / (taps.length - 1)));
 });
-
-$("subBtn").addEventListener("click", () => { state.sub = (state.sub % 4) + 1; persist(); renderAll(); });
-$("sigBtn").addEventListener("click", openSignature);
-$("sigDisplay").addEventListener("click", openSignature);
-$("tempoBtn").addEventListener("click", openTempoInput);
 
 /* ---------- Hojas de diálogo propias ---------- */
 function sheet(title, build, actions) {
@@ -316,17 +340,19 @@ function sheet(title, build, actions) {
       const b = document.createElement("button");
       b.textContent = a.label;
       if (a.cls) b.className = a.cls;
-      b.addEventListener("click", () => close(a.value === undefined ? a.label : (typeof a.value === "function" ? a.value() : a.value)));
+      b.addEventListener("click", () => close(a.value === undefined ? a.label : a.value));
       act.appendChild(b);
     });
     $("backdrop").onclick = (e) => { if (e.target === $("backdrop")) close(null); };
     $("backdrop").hidden = false;
+    $("sheet").scrollTop = 0;
   });
 }
 const askConfirm = (title, text, okLabel = "Eliminar") =>
   sheet(title, (b) => { b.innerHTML = `<p class="note">${text}</p>`; },
     [{ label: "Cancelar", value: false }, { label: okLabel, cls: "danger", value: true }]);
 
+function h3(text) { const h = document.createElement("h3"); h.textContent = text; return h; }
 function stepper(label, get, set, min, max, fmt = (v) => v, step = 1) {
   const row = document.createElement("div");
   row.className = "row";
@@ -351,18 +377,67 @@ function chips(options, current, onPick) {
   });
   return wrap;
 }
+function switchRow(label, on, onChange) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<label>${label}</label><button class="switch${on ? " on" : ""}" role="switch" aria-checked="${!!on}" aria-label="${label}"></button>`;
+  const sw = row.querySelector("button");
+  sw.onclick = () => { on = !on; sw.classList.toggle("on", on); sw.setAttribute("aria-checked", on); onChange(on); };
+  return row;
+}
 
+/* ---------- Compás, pulsos y polirritmo ---------- */
 function openSignature() {
-  let n = state.num, d = state.den;
-  sheet("Compás", (b) => {
-    b.appendChild(stepper("Tiempos por compás", () => n, (v) => (n = v), 1, 12));
-    const l = document.createElement("div");
-    l.className = "row"; l.innerHTML = "<label>Figura que marca el pulso</label>";
-    b.appendChild(l);
-    b.appendChild(chips([[2, "2"], [4, "4"], [8, "8"], [16, "16"]], d, (v) => (d = v)));
+  let n = state.num, d = state.den, grp = state.group, pOn = state.polyOn, pN = state.polyN;
+  sheet("Compás y pulsos", (b) => {
+    const render = () => {
+      b.innerHTML = "";
+      b.appendChild(stepper("Pulsos por compás", () => n, (v) => { n = v; grp = null; render(); }, 1, 16));
+      b.appendChild(h3("Figura del pulso"));
+      b.appendChild(chips([[2, "2 (blanca)"], [4, "4 (negra)"], [8, "8 (corchea)"], [16, "16"]], d, (v) => (d = v)));
+      b.appendChild(h3("Compases comunes"));
+      b.appendChild(chips(COMMON_SIGS.map(([a, c]) => [`${a}/${c}`, `${a}/${c}`]), `${n}/${d}`, (v) => {
+        [n, d] = v.split("/").map(Number); grp = null; render();
+      }));
+      if (GROUPS[n]) {
+        b.appendChild(h3("Agrupación de acentos"));
+        b.appendChild(chips([["", "Sin agrupar"], ...GROUPS[n].map((g) => [g.join("+"), g.join(" + ")])], grp ? grp.join("+") : "", (v) => {
+          grp = v ? v.split("+").map(Number) : null;
+        }));
+      }
+      b.appendChild(h3("Polirritmo"));
+      b.appendChild(switchRow("Añadir capa contra el compás", pOn, (v) => { pOn = v; render(); }));
+      if (pOn) b.appendChild(stepper("Notas repartidas en el compás", () => pN, (v) => (pN = v), 2, 16));
+    };
+    render();
   }, [{ label: "Cancelar", value: false }, { label: "Aplicar", cls: "primary", value: true }]).then((ok) => {
-    if (ok) setSignature(n, d);
+    if (!ok) return;
+    state.polyOn = pOn; state.polyN = pN;
+    setSignature(n, d);
+    if (grp && grp.reduce((a, c) => a + c, 0) === n) state.levels = groupLevels(grp);
+    state.group = grp;
+    if (running) { polyIdx = 0; polyNext = nextTime; }
+    persist(); renderAll();
   });
+}
+function openPatterns() {
+  sheet("Subdivisión del pulso", (b) => {
+    const g = document.createElement("div");
+    g.className = "pgrid";
+    PATTERNS.forEach((p) => {
+      const c = document.createElement("button");
+      c.className = "pcell" + (p.id === state.pat ? " sel" : "");
+      c.innerHTML = `<span class="pv">${pvHTML(p)}</span><span>${p.name}</span>`;
+      c.onclick = () => {
+        state.pat = p.id; persist(); renderAll();
+        g.querySelectorAll(".pcell").forEach((x) => x.classList.remove("sel"));
+        c.classList.add("sel");
+      };
+      g.appendChild(c);
+    });
+    b.appendChild(g);
+    b.insertAdjacentHTML("beforeend", '<p class="note">Las barras llenas suenan y las vacías son silencios dentro de cada pulso.</p>');
+  }, [{ label: "Listo", cls: "primary", value: true }]);
 }
 function openTempoInput() {
   let inp;
@@ -376,15 +451,62 @@ function openTempoInput() {
     if (ok && inp.value) setBpm(parseInt(inp.value, 10) || state.bpm);
   });
 }
+$("sigBtn").addEventListener("click", openSignature);
+$("polyChip").addEventListener("click", openSignature);
+$("subBtn").addEventListener("click", openPatterns);
+$("tempoBtn").addEventListener("click", openTempoInput);
+
+/* ---------- Sonido, volumen, pantalla y tema ---------- */
 $("btnSound").addEventListener("click", () => {
   sheet("Sonido", (b) => {
-    b.appendChild(chips(Object.entries(SOUNDS).map(([k, v]) => [k, v.name]), state.sound, (v) => { state.sound = v; persist(); }));
-    const l = document.createElement("div");
-    l.className = "row"; l.innerHTML = "<label>Subdivisión</label>";
-    b.appendChild(l);
-    b.appendChild(chips(SUBDIVS.map((s) => [s.n, s.name]), state.sub, (v) => { state.sub = v; persist(); renderAll(); }));
+    b.appendChild(chips(Object.entries(SOUNDS).map(([k, v]) => [k, v.name]), state.sound, (v) => {
+      state.sound = v; persist();
+      if (ctx) click(ctx.currentTime + 0.02, 3);
+    }));
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
+$("btnVol").addEventListener("click", () => {
+  sheet("Volumen", (b) => {
+    const r = document.createElement("input");
+    r.type = "range"; r.min = 0; r.max = 1; r.step = 0.01; r.value = state.vol;
+    r.oninput = () => { state.vol = +r.value; if (master) master.gain.value = state.vol; persist(); };
+    b.appendChild(r);
+  }, [{ label: "Listo", cls: "primary", value: true }]);
+});
+let wakeLock = null;
+$("btnAwake").addEventListener("click", async () => {
+  if (wakeLock) { try { await wakeLock.release(); } catch { /* ya liberado */ } wakeLock = null; $("btnAwake").classList.remove("active"); return; }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; $("btnAwake").classList.remove("active"); });
+    $("btnAwake").classList.add("active");
+  } catch {
+    sheet("Pantalla encendida", (b) => { b.innerHTML = '<p class="note">Este dispositivo no permite mantener la pantalla encendida.</p>'; },
+      [{ label: "Entendido", cls: "primary", value: true }]);
+  }
+});
+$("btnTheme").addEventListener("click", () => {
+  sheet("Tema", (b) => {
+    const g = document.createElement("div");
+    g.className = "swgrid";
+    THEMES.forEach(([id, name]) => {
+      const s = document.createElement("button");
+      s.className = "swatch" + (id === "auto" ? " auto" : "") + (id === themeChoice ? " sel" : "");
+      if (id !== "auto") s.dataset.theme = id;
+      s.innerHTML = `<span>${name}</span>`;
+      s.onclick = () => {
+        themeChoice = id; store.set("metro.theme", id); applyTheme();
+        g.querySelectorAll(".swatch").forEach((x) => x.classList.remove("sel"));
+        s.classList.add("sel");
+      };
+      g.appendChild(s);
+    });
+    b.appendChild(g);
+    b.insertAdjacentHTML("beforeend",
+      '<div class="credit"><span>Desarrollado por</span><img class="logo-dark" src="img/lpsolutions-blanco.webp" alt="LPSOLUTIONS"><img class="logo-light" src="img/lpsolutions-negro.webp" alt="LPSOLUTIONS"></div>');
+  }, [{ label: "Listo", cls: "primary", value: true }]);
+});
+
 /* ---------- Temporizador ---------- */
 let tRunning = false, tPaused = false, tEnd = 0, tLeft = 0, tId = null;
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -392,14 +514,7 @@ const timerSecs = () => (tPaused ? Math.ceil(tLeft / 1000) : Math.max(0, Math.ce
 
 function chime() {
   if (!ctx) return;
-  [0, 0.2, 0.4].forEach((d) => {
-    const t = ctx.currentTime + 0.05 + d, o = ctx.createOscillator(), e = ctx.createGain();
-    o.type = "sine"; o.frequency.value = 1320;
-    e.gain.setValueAtTime(0.0001, t);
-    e.gain.exponentialRampToValueAtTime(0.5, t + 0.01);
-    e.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-    o.connect(e); e.connect(master); o.start(t); o.stop(t + 0.2);
-  });
+  [0, 0.2, 0.4].forEach((d) => tone(ctx.currentTime + 0.05 + d, "sine", 1320, 0.5, 0.16));
 }
 function timerRender() {
   const b = $("btnTimer");
@@ -463,41 +578,13 @@ function timerSheet() {
   };
   sheet("Temporizador", (b) => {
     b.innerHTML = '<div class="timer-lcd" id="timerLcd"></div><div class="ctl-row" id="tCtl"></div><div id="tDur"></div><div id="tOpts"></div>';
-    $("tDur").appendChild(stepper("Duración (min)", () => state.timerMin, (v) => { state.timerMin = v; persist(); timerRender(); }, 1, 180, (v) => v, 1));
+    $("tDur").appendChild(stepper("Duración (min)", () => state.timerMin, (v) => { state.timerMin = v; persist(); timerRender(); }, 1, 180));
     [["tStart", "Iniciar metrónomo simultáneamente"], ["tStop", "Detener el metrónomo cuando el temporizador termine"], ["tRepeat", "Temporizador repetido"]]
-      .forEach(([k, label]) => {
-        const row = document.createElement("div");
-        row.className = "row";
-        row.innerHTML = `<label>${label}</label><button class="switch${state[k] ? " on" : ""}" role="switch" aria-checked="${!!state[k]}" aria-label="${label}"></button>`;
-        const sw = row.querySelector("button");
-        sw.onclick = () => { state[k] = !state[k]; sw.classList.toggle("on", state[k]); sw.setAttribute("aria-checked", state[k]); persist(); };
-        $("tOpts").appendChild(row);
-      });
+      .forEach(([k, label]) => $("tOpts").appendChild(switchRow(label, state[k], (v) => { state[k] = v; persist(); })));
     renderCtl(); timerRender();
   }, [{ label: "Cerrar", cls: "primary", value: true }]);
 }
 $("btnTimer").addEventListener("click", timerSheet);
-$("btnVol").addEventListener("click", () => {
-  sheet("Volumen", (b) => {
-    const r = document.createElement("input");
-    r.type = "range"; r.min = 0; r.max = 1; r.step = 0.01; r.value = state.vol;
-    r.oninput = () => { state.vol = +r.value; if (master) master.gain.value = state.vol; persist(); };
-    b.appendChild(r);
-  }, [{ label: "Listo", cls: "primary", value: true }]);
-});
-
-let wakeLock = null;
-$("btnAwake").addEventListener("click", async () => {
-  if (wakeLock) { try { await wakeLock.release(); } catch {} wakeLock = null; $("btnAwake").classList.remove("active"); return; }
-  try {
-    wakeLock = await navigator.wakeLock.request("screen");
-    wakeLock.addEventListener("release", () => { wakeLock = null; $("btnAwake").classList.remove("active"); });
-    $("btnAwake").classList.add("active");
-  } catch {
-    sheet("Pantalla encendida", (b) => { b.innerHTML = '<p class="note">Este dispositivo no permite mantener la pantalla encendida.</p>'; },
-      [{ label: "Entendido", cls: "primary", value: true }]);
-  }
-});
 
 /* ---------- Pestañas y repertorio ---------- */
 document.querySelectorAll(".tab[data-view]").forEach((t) => t.addEventListener("click", () => {
@@ -512,11 +599,14 @@ function renderSongs() {
   $("songEmpty").hidden = songs.length > 0;
   songs.forEach((s, i) => {
     const li = document.createElement("li");
-    li.innerHTML = `<button class="info"><div class="nm"></div><div class="meta"></div></button><button class="del" aria-label="Eliminar"><i class="fa-solid fa-trash"></i></button>`;
+    li.innerHTML = '<button class="info"><div class="nm"></div><div class="meta"></div></button><button class="del" aria-label="Eliminar"><i class="fa-solid fa-trash"></i></button>';
     li.querySelector(".nm").textContent = s.name;
-    li.querySelector(".meta").textContent = `${s.bpm} BPM, ${s.num}/${s.den}, ${SUBDIVS[s.sub - 1].name}`;
+    li.querySelector(".meta").textContent = `${s.bpm} BPM, ${s.num}/${s.den}, ${patOf(songPat(s)).name}${s.polyOn ? `, poli ${s.polyN}:${s.num}` : ""}`;
     li.querySelector(".info").onclick = () => {
-      Object.assign(state, { bpm: s.bpm, num: s.num, den: s.den, sub: s.sub, levels: normalizeLevels(s.levels, s.num) });
+      Object.assign(state, {
+        bpm: s.bpm, num: s.num, den: s.den, pat: songPat(s), levels: normalizeLevels(s.levels, s.num),
+        polyOn: !!s.polyOn, polyN: s.polyN || 3, group: null,
+      });
       persist(); renderAll(); showView("viewMetro");
     };
     li.querySelector(".del").onclick = async () => {
@@ -537,7 +627,7 @@ $("saveCur").addEventListener("click", () => {
   }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
     const name = inp.value.trim();
     if (!ok || !name) return;
-    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, sub: state.sub, levels: [...state.levels] });
+    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, pat: state.pat, levels: [...state.levels], polyOn: state.polyOn, polyN: state.polyN });
     store.set("metro.songs", songs); renderSongs();
   });
 });
@@ -565,7 +655,6 @@ function practicePlan(p, el) {
   }
   return { bpm: Math.round(p.from + (p.to - p.from) * Math.min(1, el / (p.min * 60))), step: 0 };
 }
-
 let run = null, runId = null;
 function startPractice(p) {
   if (running) stop();
@@ -589,7 +678,6 @@ function practiceTick() {
   const left = fmtTime(Math.ceil(total - el));
   $("status").textContent = (p.type === "fija" ? `Paso ${step}/${p.steps}, ` : "Progresivo, ") + `${bpm} BPM, quedan ${left}`;
 }
-
 function renderPractices() {
   const box = $("practiceList");
   box.innerHTML = "";
@@ -625,9 +713,7 @@ function editPractice(existing) {
     nameInp = document.createElement("input");
     nameInp.type = "text"; nameInp.placeholder = "Nombre"; nameInp.maxLength = 40; nameInp.value = d.name;
     b.appendChild(nameInp);
-    const l = document.createElement("div");
-    l.className = "row"; l.innerHTML = "<label>Tipo</label>";
-    b.appendChild(l);
+    b.appendChild(h3("Tipo"));
     b.appendChild(chips([["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => { d.type = v; stepsRow.hidden = v !== "fija"; }));
     b.insertAdjacentHTML("beforeend", '<p class="note">Fija: sube en pasos y cada paso dura el tiempo indicado. Progresiva: sube de forma continua durante el tiempo total.</p>');
     b.appendChild(stepper("BPM inicial", () => d.from, (v) => (d.from = v), 20, 300, (v) => v, 5));
@@ -646,90 +732,9 @@ function editPractice(existing) {
 }
 $("addPractice").addEventListener("click", () => editPractice(null));
 
-/* ---------- Clave de acceso (PIN) ---------- */
-const PIN_LEN = 4;
-const lockEl = $("lock");
-let pinBuf = "", pinMode = "enter", pinFirst = "", failCount = 0, lockedUntil = 0, hiddenAt = 0;
-
-const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-async function hashPin(pin, saltHex) {
-  const salt = Uint8Array.from(saltHex.match(/../g).map((h) => parseInt(h, 16)));
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
-  return toHex(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, key, 256));
-}
-function drawDots(err) {
-  const d = $("lockDots");
-  d.innerHTML = "";
-  for (let i = 0; i < PIN_LEN; i++) d.insertAdjacentHTML("beforeend", `<i class="${i < pinBuf.length ? "f" : ""}"></i>`);
-  if (err) { d.classList.remove("shake"); void d.offsetWidth; d.classList.add("shake"); }
-}
-function lockMsg(title, hint, isErr) {
-  $("lockTitle").textContent = title;
-  $("lockHint").textContent = hint || "";
-  $("lockHint").classList.toggle("err", !!isErr);
-}
-function showLock() {
-  stop();
-  pinBuf = ""; pinFirst = "";
-  const cfg = store.get("metro.pin", null);
-  pinMode = cfg ? "enter" : "create";
-  lockMsg(cfg ? "Ingresa tu clave" : "Crea tu clave", cfg ? "" : `Elige ${PIN_LEN} dígitos para proteger la app.`);
-  drawDots();
-  lockEl.hidden = false;
-  $("app").hidden = true;
-}
-function unlock() {
-  lockEl.hidden = true;
-  $("app").hidden = false;
-}
-async function submitPin() {
-  const pin = pinBuf;
-  pinBuf = "";
-  if (pinMode === "create") {
-    pinFirst = pin; pinMode = "confirm";
-    lockMsg("Confirma tu clave", "Escríbela de nuevo.");
-    drawDots();
-  } else if (pinMode === "confirm") {
-    if (pin !== pinFirst) {
-      pinMode = "create"; pinFirst = "";
-      lockMsg("Crea tu clave", "No coincidieron, inténtalo otra vez.", true);
-      drawDots(true);
-      return;
-    }
-    const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
-    store.set("metro.pin", { salt, hash: await hashPin(pin, salt) });
-    unlock();
-  } else {
-    const wait = lockedUntil - Date.now();
-    if (wait > 0) { lockMsg("Demasiados intentos", `Espera ${Math.ceil(wait / 1000)} s.`, true); drawDots(true); return; }
-    const cfg = store.get("metro.pin", null);
-    if (cfg && (await hashPin(pin, cfg.salt)) === cfg.hash) {
-      failCount = 0; unlock();
-    } else {
-      failCount++;
-      if (failCount >= 5) { lockedUntil = Date.now() + 30000; failCount = 0; lockMsg("Demasiados intentos", "Espera 30 s.", true); }
-      else lockMsg("Ingresa tu clave", "Clave incorrecta.", true);
-      drawDots(true);
-    }
-  }
-}
-$("keypad").addEventListener("click", (e) => {
-  const b = e.target.closest("button");
-  if (!b) return;
-  const k = b.dataset.k;
-  if (k === "del") pinBuf = pinBuf.slice(0, -1);
-  else if (pinBuf.length < PIN_LEN) pinBuf += k;
-  drawDots();
-  if (pinBuf.length === PIN_LEN) setTimeout(submitPin, 120);
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) hiddenAt = Date.now();
-  else if (hiddenAt && Date.now() - hiddenAt > 60000 && lockEl.hidden) showLock();
-});
-
 /* ---------- Arranque ---------- */
+applyTheme();
 renderAll();
 renderSongs();
 renderPractices();
-showLock();
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js?v=3").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

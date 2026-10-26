@@ -189,7 +189,7 @@ function setSignature(num, den) {
 let ctx = null, master = null, silentEl = null;
 let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], polyQueue = [];
 let polyNext = 0, polyIdx = 0;
-let barIdx = 0, countLeft = 0, countTotal = 0, halted = false, sessionStart = 0, barHook = null;
+let barIdx = 0, countLeft = 0, countTotal = 0, halted = false, sessionStart = 0, sessionAcc = 0, barHook = null;
 
 function silentWav() {
   const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -365,13 +365,17 @@ function flashPoly(i) {
   for (const d of dots) d.classList.remove("on");
   if (dots[i]) dots[i].classList.add("on");
 }
-function start() {
+function start(resume) {
   if (running) return;
   ensureAudio();
   running = true; halted = false;
-  beatIdx = 0; subIdx = 0; barIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
-  countTotal = state.ciOn ? state.ciBars * state.num : 0;
-  countLeft = countTotal;
+  beatIdx = 0; subIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
+  if (resume) countLeft = 0;
+  else {
+    barIdx = 0; sessionAcc = 0;
+    countTotal = state.ciOn ? state.ciBars * state.num : 0;
+    countLeft = countTotal;
+  }
   nextTime = ctx.currentTime + 0.08;
   polyNext = nextTime;
   sessionStart = performance.now();
@@ -381,21 +385,25 @@ function start() {
   setPlayUI(true);
   requestAnimationFrame(visLoop);
 }
-function stop() {
+// stop(true) pausa una práctica sin darla por terminada.
+function stop(keepRun) {
   if (!running) return;
   running = false;
   clearInterval(timerId);
-  logSession(run ? run.p.name : "Metrónomo libre", (performance.now() - sessionStart) / 1000);
-  barHook = null; halted = false; countLeft = 0;
-  if (run) { clearInterval(runId); run = null; }
+  sessionAcc += (performance.now() - sessionStart) / 1000;
+  if (keepRun !== true) {
+    logSession(run ? run.p.name : "Metrónomo libre", sessionAcc);
+    barHook = null;
+    if (run) { clearInterval(runId); run = null; }
+  }
+  halted = false; countLeft = 0;
   if (silentEl && !tRunning && !droneOn) silentEl.pause();
   try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch { /* sin voz */ }
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   document.querySelectorAll("#polyDots .on").forEach((c) => c.classList.remove("on"));
   document.querySelectorAll("#orbDots .on").forEach((c) => c.classList.remove("on"));
   setPlayUI(false);
-  clearPracticeUI();
-  $("status").innerHTML = "&nbsp;";
+  if (keepRun !== true) { clearPracticeUI(); idleStatus(); }
 }
 
 /* ---------- Dial y botones ---------- */
@@ -437,7 +445,11 @@ function holdRepeat(el, delta) {
 }
 document.querySelectorAll(".js-minus").forEach((b) => holdRepeat(b, -1));
 document.querySelectorAll(".js-plus").forEach((b) => holdRepeat(b, 1));
-const togglePlay = () => (running ? stop() : start());
+const togglePlay = () => {
+  if (run && run.paused) return resumeRun();
+  if (run && running) return pauseRun();
+  return running ? stop() : start();
+};
 document.querySelectorAll(".js-play").forEach((b) => b.addEventListener("click", togglePlay));
 
 let taps = [];
@@ -891,11 +903,12 @@ function editSections(s) {
 function startSong(s) {
   if (!s.sections || !s.sections.length) return;
   loadSong(s);
+  lastRun = { kind: "song", id: s.id }; store.set("metro.lastRun", lastRun);
   startRun({ name: s.name, id: "song" + s.id }, compileSections(s.sections), "bars");
 }
 
 /* ---------- Copia de seguridad (archivo local) ---------- */
-const BACKUP_KEYS = ["metro.state", "metro.songs", "metro.practices", "metro.log", "metro.theme", "metro.ctl"];
+const BACKUP_KEYS = ["metro.state", "metro.songs", "metro.practices", "metro.log", "metro.theme", "metro.ctl", "metro.lastRun"];
 async function exportData() {
   const data = {};
   BACKUP_KEYS.forEach((k) => { const v = store.get(k, undefined); if (v !== undefined) data[k] = v; });
@@ -967,7 +980,7 @@ if (!practices) {
     { id: 1, name: "Práctica de velocidad fija", type: "fija", from: 80, to: 120, steps: 4, min: 1, last: 0 },
     { id: 2, name: "Práctica de velocidad progresiva", type: "progresiva", from: 75, to: 150, steps: 6, min: 6, last: 0 },
     { id: 3, name: "Intervalos 120, 100, 140", type: "custom", unit: "time", last: 0,
-      intervals: [{ bpm: 120, sec: 60, bars: 8, ramp: false }, { bpm: 100, sec: 60, bars: 8, ramp: false }, { bpm: 140, sec: 60, bars: 8, ramp: false }] },
+      intervals: [{ bpm: 120, sec: 60, bars: 8, mode: "salto" }, { bpm: 100, sec: 60, bars: 8, mode: "salto" }, { bpm: 140, sec: 60, bars: 8, mode: "gradual", trans: 15, transBars: 2 }] },
   ];
   store.set("metro.practices", practices);
 }
@@ -976,19 +989,30 @@ const fmtLen = (unit, v) => (unit === "bars" ? `${Math.round(v)} comp.` : fmtTim
 const unitOf = (p) => (p.type === "custom" && p.unit === "bars" ? "bars" : "time");
 
 // Toda práctica se reduce a tramos {from, to, len}: constante si from == to, gradual si no.
-// len son segundos o compases según la unidad.
+// len son segundos o compases según la unidad. Cada intervalo personalizado puede cambiar
+// "de golpe" al entrar, o "gradual": el tempo viaja desde el anterior durante la transición
+// y luego se mantiene.
 function compileSegs(p) {
   if (p.type === "custom") {
     const iv = p.intervals || [], bars = p.unit === "bars";
-    return iv.map((x, i) => ({ from: x.ramp && i > 0 ? iv[i - 1].bpm : x.bpm, to: x.bpm, len: bars ? x.bars || 4 : x.sec }));
+    return iv.flatMap((x, i) => {
+      const len = Math.max(1, bars ? x.bars || 4 : x.sec);
+      const mode = x.mode || (x.ramp ? "gradual" : "salto"), tag = { iv: i + 1, n: iv.length };
+      if (i === 0 || mode !== "gradual") return [{ from: x.bpm, to: x.bpm, len, pin: true, ...tag }];
+      const legacy = !x.mode && x.ramp;
+      const t = clamp(bars ? (x.transBars ?? (legacy ? len : Math.min(2, len))) : (x.trans ?? (legacy ? len : Math.min(10, len))), 1, len);
+      const out = [{ from: iv[i - 1].bpm, to: x.bpm, len: t, pin: t >= len, ...tag }];
+      if (len - t > 0) out.push({ from: x.bpm, to: x.bpm, len: len - t, pin: true, ...tag });
+      return out;
+    });
   }
   if (p.type === "fija") {
     return Array.from({ length: p.steps }, (_, i) => {
       const b = Math.round(p.from + ((p.to - p.from) * i) / Math.max(1, p.steps - 1));
-      return { from: b, to: b, len: p.min * 60 };
+      return { from: b, to: b, len: p.min * 60, pin: true, iv: i + 1, n: p.steps };
     });
   }
-  return [{ from: p.from, to: p.to, len: p.min * 60 }];
+  return [{ from: p.from, to: p.to, len: p.min * 60, pin: true }];
 }
 const planTotal = (segs) => segs.reduce((a, s) => a + s.len, 0);
 function planAt(segs, el) {
@@ -1006,7 +1030,7 @@ function planAt(segs, el) {
 function practiceMeta(p) {
   const segs = compileSegs(p), all = segs.flatMap((s) => [s.from, s.to]), unit = unitOf(p);
   const lo = Math.min(...all), hi = Math.max(...all), tot = fmtLen(unit, planTotal(segs));
-  if (p.type === "custom") return `${segs.length} ${segs.length === 1 ? "intervalo" : "intervalos"}, ${lo} - ${hi} BPM, ${tot}`;
+  if (p.type === "custom") { const n = p.intervals.length; return `${n} ${n === 1 ? "intervalo" : "intervalos"}, ${lo} - ${hi} BPM, ${tot}`; }
   if (p.type === "fija") return `${p.from} - ${p.to} BPM, ${p.steps} pasos de ${p.min} min`;
   return `${p.from} - ${p.to} BPM, ${p.min} min en total`;
 }
@@ -1053,9 +1077,11 @@ function graphSVG(segs, { h = 120, labels = true, axis = true, unit = "time" } =
   if (labels) {
     let a = 0;
     const step = segs.length > 14 ? 3 : segs.length > 8 ? 2 : 1;
-    segs.forEach((sg, i) => {
+    let shown = 0;
+    segs.forEach((sg) => {
       const tm = a + sg.len / 2; a += sg.len;
-      const x = X(tm), y = Y(raw(tm));
+      if (sg.pin === false) return;
+      const x = X(tm), y = Y(raw(tm)), i = shown++;
       s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" class="pin"/>`;
       if (i % step === 0) s += `<text class="lbl" x="${x.toFixed(1)}" y="${(y - 9).toFixed(1)}" text-anchor="middle">${Math.round(sg.to)}</text>`;
     });
@@ -1073,18 +1099,32 @@ function setCursor(root, frac) {
 }
 
 /* Ejecución de una práctica o de una canción con secciones */
-let run = null, runId = null;
-function startPractice(p) { startRun(p, compileSegs(p), unitOf(p)); }
+let run = null, runId = null, runDone = null;
+let lastRun = store.get("metro.lastRun", null);
+const lastRunItem = () => {
+  if (!lastRun) return null;
+  return lastRun.kind === "song" ? songs.find((x) => x.id === lastRun.id) : practices.find((x) => x.id === lastRun.id);
+};
+function startPractice(p) {
+  lastRun = { kind: "practice", id: p.id }; store.set("metro.lastRun", lastRun);
+  startRun(p, compileSegs(p), unitOf(p));
+}
+function startLast() {
+  const it = lastRunItem();
+  if (!it) return;
+  if (lastRun.kind === "song") startSong(it); else startPractice(it);
+}
 function startRun(p, segs, unit) {
   if (running) stop();
+  if (run) endRun();
+  runDone = null;
   showView("viewMetro");
-  run = { p, segs, unit, total: planTotal(segs), t0: unit === "time" && !state.ciOn ? performance.now() : null, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0 };
+  run = { p, segs, unit, total: planTotal(segs), t0: unit === "time" && !state.ciOn ? performance.now() : null, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0, paused: false, pauseT: 0 };
   barHook = unit === "bars" ? runBarHook : null;
   if (unit === "time") setBpm(planAt(segs, 0).bpm);
-  const rg = $("runGraph");
-  rg.innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false, unit });
-  rg.hidden = false;
+  $("rgSvg").innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false, unit });
   start();
+  renderRunCtl();
   practiceTick();
   runId = setInterval(practiceTick, 250);
 }
@@ -1099,14 +1139,65 @@ function runBarHook(bar) {
   return true;
 }
 function finishRun() {
-  const p = run.p;
-  p.last = Date.now(); savePractices(); renderPractices();
+  const desc = { p: run.p, segs: run.segs, unit: run.unit };
+  run.p.last = Date.now(); savePractices(); renderPractices();
   chime(); stop();
+  runDone = desc;
+  setCursor($("runGraph"), 1);
+  renderRunCtl();
   $("status").textContent = "Práctica completada";
 }
-function practiceTick() {
+// Pausar conserva la práctica: el tiempo y el compás actual quedan donde estaban.
+function pauseRun() {
+  if (!run || !running || run.paused) return;
+  run.paused = true; run.pauseT = performance.now();
+  stop(true);
+  $("status").textContent = "En pausa";
+  renderRunCtl();
+}
+function resumeRun() {
+  if (!run || !run.paused) return;
+  run.paused = false;
+  if (run.unit === "time") { if (run.t0 === null) run.t0 = performance.now(); else run.t0 += performance.now() - run.pauseT; }
+  start(true);
+  renderRunCtl();
+  practiceTick();
+}
+// Terminar: cierra la práctica (activa o en pausa) y registra la sesión.
+function endRun() {
   if (!run) return;
-  const { p, segs, total, unit } = run;
+  if (running) { stop(); return; }
+  logSession(run.p.name, sessionAcc);
+  clearInterval(runId); run = null; barHook = null;
+  renderRunCtl(); idleStatus();
+}
+function trendOf(segs, el) {
+  const { idx } = planAt(segs, el), s = segs[idx - 1], nx = segs[idx];
+  if (s.to > s.from) return { dir: 1, target: s.to };
+  if (s.to < s.from) return { dir: -1, target: s.to };
+  return { dir: 0, target: s.to, next: nx && nx.to !== s.to ? nx.to : null };
+}
+// Indicador de subida o bajada del tempo, visible mientras corre una práctica.
+function updateTrend(t) {
+  const el = $("trend"), num = $("bpmNum");
+  num.classList.remove("up", "down");
+  if (!run) { el.hidden = true; return; }
+  if (run.paused) { setTrend(el, "hold", "pause", "En pausa", `${state.bpm} BPM`); return; }
+  if (!t) { el.hidden = true; return; }
+  if (t.dir > 0) { setTrend(el, "up", "angles-up", "Subiendo", `hacia ${t.target} BPM`); num.classList.add("up"); }
+  else if (t.dir < 0) { setTrend(el, "down", "angles-down", "Bajando", `hacia ${t.target} BPM`); num.classList.add("down"); }
+  else setTrend(el, "hold", "equals", "Estable", t.next ? `luego ${t.next} BPM` : `en ${t.target} BPM`);
+}
+function setTrend(el, cls, icon, title, sub) {
+  el.hidden = false;
+  el.className = `trend ${cls}`;
+  el.querySelector("i").className = `fa-solid fa-${icon}`;
+  el.querySelector("b").textContent = title;
+  el.querySelector("small").textContent = sub;
+}
+function practiceTick() {
+  if (!run || run.paused) return;
+  const { segs, total, unit } = run;
   let el;
   if (unit === "bars") {
     if (run.endAt) { if (ctx.currentTime >= run.endAt) finishRun(); return; }
@@ -1120,15 +1211,50 @@ function practiceTick() {
   }
   const { idx, count } = planAt(segs, el), seg = segs[idx - 1];
   const left = unit === "bars" ? `${Math.max(0, total - Math.floor(el))} comp.` : fmtTime(Math.ceil(total - el));
-  const label = seg && seg.meta && seg.meta.name ? seg.meta.name : count > 1 ? `Intervalo ${idx}/${count}` : "Gradual";
-  $("status").textContent = `${label}, ${state.bpm} BPM, quedan ${left}`;
+  const label = seg && seg.meta && seg.meta.name ? seg.meta.name : seg && seg.iv ? `Intervalo ${seg.iv}/${seg.n}` : count > 1 ? `Tramo ${idx}/${count}` : "Gradual";
+  $("status").textContent = `${label}, quedan ${left}`;
+  updateTrend(trendOf(segs, el));
   setCursor($("runGraph"), el / total);
-  setCursor(document.querySelector(`.pcard[data-id="${p.id}"]`), el / total);
+  setCursor(document.querySelector(`.pcard[data-id="${run.p.id}"]`), el / total);
+}
+// Panel de la práctica: curva y controles según el estado (activa, en pausa o terminada).
+function renderRunCtl() {
+  const box = $("runGraph"), ctl = $("runCtl"), cur = run || runDone;
+  box.hidden = !cur;
+  $("viewMetro").querySelector(".hero").classList.toggle("runmode", !!run);
+  ctl.innerHTML = "";
+  if (!cur) { updateTrend(); return; }
+  const add = (icon, label, fn, cls) => {
+    const b = document.createElement("button");
+    b.className = cls || "";
+    b.innerHTML = `<i class="fa-solid fa-${icon}"></i><span>${label}</span>`;
+    b.onclick = fn;
+    ctl.appendChild(b);
+  };
+  if (run) {
+    add("rotate-left", "Reiniciar", startLast);
+    add(run.paused ? "play" : "pause", run.paused ? "Reanudar" : "Pausar", togglePlay);
+    add("stop", "Terminar", endRun, "end");
+  } else {
+    add("rotate-left", "Reiniciar", startLast);
+    add("xmark", "Cerrar", () => { runDone = null; renderRunCtl(); idleStatus(); });
+  }
+  updateTrend();
 }
 function clearPracticeUI() {
-  $("runGraph").hidden = true;
   document.querySelectorAll(".gcur").forEach((c) => { c.style.opacity = 0; });
+  renderRunCtl();
 }
+// Con el metrónomo en reposo, un acceso directo repite la última práctica.
+function idleStatus() {
+  const st = $("status"), it = lastRunItem();
+  if (!run && !runDone && it) {
+    st.innerHTML = '<button class="lastrun"><i class="fa-solid fa-rotate-left"></i><span></span></button>';
+    st.querySelector("span").textContent = `Repetir: ${it.name}`;
+    st.querySelector("button").onclick = startLast;
+  } else st.innerHTML = "&nbsp;";
+}
+
 
 function renderPractices() {
   const box = $("practiceList");
@@ -1158,11 +1284,22 @@ async function practiceMenu(p) {
   }
 }
 
-const SEED_IV = [{ bpm: 120, sec: 60, bars: 8, ramp: false }, { bpm: 100, sec: 60, bars: 8, ramp: false }, { bpm: 140, sec: 60, bars: 8, ramp: false }];
+const SEED_IV = [{ bpm: 120, sec: 60, bars: 8, mode: "salto" }, { bpm: 100, sec: 60, bars: 8, mode: "salto" }, { bpm: 140, sec: 60, bars: 8, mode: "gradual", trans: 15, transBars: 2 }];
+// Completa los campos de un intervalo (también los de prácticas guardadas con el formato anterior).
+function normIv(iv) {
+  if (!iv.sec) iv.sec = 60;
+  if (!iv.bars) iv.bars = clamp(Math.round((iv.sec * iv.bpm) / 60 / 4), 1, 512);
+  const legacy = !iv.mode && iv.ramp;
+  iv.mode = iv.mode || (iv.ramp ? "gradual" : "salto");
+  if (iv.trans == null) iv.trans = legacy ? iv.sec : Math.min(10, iv.sec);
+  if (iv.transBars == null) iv.transBars = legacy ? iv.bars : Math.min(2, iv.bars);
+  delete iv.ramp;
+  return iv;
+}
 function editPractice(existing) {
   const d = JSON.parse(JSON.stringify(Object.assign(
     { name: "", type: "custom", unit: "time", from: 80, to: 120, steps: 4, min: 1, intervals: SEED_IV }, existing || {})));
-  d.intervals.forEach((iv) => { if (!iv.bars) iv.bars = clamp(Math.round(((iv.sec || 60) * iv.bpm) / 60 / 4), 1, 512); if (!iv.sec) iv.sec = 60; });
+  d.intervals.forEach(normIv);
   let nameInp, gbox, dyn;
   const updateGraph = () => {
     const segs = compileSegs(d), unit = unitOf(d);
@@ -1180,7 +1317,7 @@ function editPractice(existing) {
       const add = document.createElement("button");
       add.className = "btn-wide"; add.innerHTML = '<i class="fa-solid fa-plus"></i> Añadir intervalo';
       add.disabled = d.intervals.length >= 20;
-      add.onclick = () => { const l2 = d.intervals[d.intervals.length - 1]; d.intervals.push({ ...l2, ramp: false }); renderBody(); };
+      add.onclick = () => { const l2 = d.intervals[d.intervals.length - 1]; d.intervals.push({ ...l2 }); renderBody(); };
       dyn.appendChild(add);
     } else {
       dyn.appendChild(stepper("BPM inicial", () => d.from, (v) => { d.from = v; updateGraph(); }, 20, 300, (v) => v, 5));
@@ -1191,28 +1328,43 @@ function editPractice(existing) {
     updateGraph();
   };
   const ivRow = (i) => {
-    const iv = d.intervals[i], row = document.createElement("div"), bars = d.unit === "bars";
+    const iv = d.intervals[i], row = document.createElement("div"), bars = d.unit === "bars", first = i === 0;
     row.className = "iv";
     const dur = bars
       ? `<div class="iv-f"><label>Compases</label><div class="mst"><button data-a="rm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bars" type="tel" inputmode="numeric" maxlength="3" value="${iv.bars}"><button data-a="rp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>`
-      : `<div class="iv-f"><label>Duración</label><div class="mst"><button data-a="dm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output>${fmtTime(iv.sec)}</output><button data-a="dp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>`;
+      : `<div class="iv-f"><label>Duración</label><div class="mst"><button data-a="dm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output data-o="dur">${fmtTime(iv.sec)}</output><button data-a="dp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>`;
+    const gradual = !first && iv.mode === "gradual";
+    const tv = bars ? iv.transBars : iv.trans;
     row.innerHTML = `<div class="iv-top"><span class="iv-n">${i + 1}</span>
       <div class="iv-f"><label>BPM</label><div class="mst"><button data-a="bm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bpm" type="tel" inputmode="numeric" maxlength="3" value="${iv.bpm}"><button data-a="bp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>${dur}</div>
-      <div class="iv-bot"><button class="ivtog${iv.ramp && i ? " on" : ""}" data-a="tog"${i === 0 ? " disabled" : ""}><i class="fa-solid fa-chart-line"></i> Gradual</button>
-      <button data-a="dup"><i class="fa-solid fa-copy"></i> Duplicar</button>
+      <div class="iv-mode"><label>Cómo llega a este tempo</label>
+        <div class="seg2"><button data-a="salto" class="${!gradual ? "on" : ""}"${first ? " disabled" : ""}><i class="fa-solid fa-arrow-right"></i> De golpe</button><button data-a="gradual" class="${gradual ? "on" : ""}"${first ? " disabled" : ""}><i class="fa-solid fa-chart-line"></i> Gradual</button></div>
+        ${first ? '<p class="note">El primer intervalo siempre arranca directo.</p>' : ""}
+      </div>
+      ${gradual ? `<div class="iv-f iv-trans"><label>Tiempo de transición</label><div class="mst"><button data-a="tm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output data-o="trans">${bars ? `${tv} comp.` : `${tv} s`}</output><button data-a="tp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>` : ""}
+      <div class="iv-bot"><button data-a="dup"><i class="fa-solid fa-copy"></i> Duplicar</button>
       <button data-a="del"${d.intervals.length === 1 ? " disabled" : ""}><i class="fa-solid fa-trash"></i> Quitar</button></div>`;
-    const out = row.querySelector("output");
+    const lenOf = () => (bars ? iv.bars : iv.sec);
+    const fixTrans = () => {
+      iv.trans = clamp(iv.trans, 5, Math.max(5, iv.sec)); iv.transBars = clamp(iv.transBars, 1, Math.max(1, iv.bars));
+      const o = row.querySelector('[data-o="trans"]');
+      if (o) o.textContent = bars ? `${iv.transBars} comp.` : `${iv.trans} s`;
+    };
     row.querySelectorAll("input.iv-in").forEach((inp) => {
       const k = inp.dataset.k, lo = k === "bpm" ? 20 : 1, hi = k === "bpm" ? 300 : 999;
-      inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= lo && v <= hi) { iv[k] = v; updateGraph(); } });
-      inp.addEventListener("change", () => { iv[k] = clamp(parseInt(inp.value, 10) || iv[k], lo, hi); inp.value = iv[k]; updateGraph(); });
+      inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= lo && v <= hi) { iv[k] = v; fixTrans(); updateGraph(); } });
+      inp.addEventListener("change", () => { iv[k] = clamp(parseInt(inp.value, 10) || iv[k], lo, hi); inp.value = iv[k]; fixTrans(); updateGraph(); });
     });
     row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
       const a = b.dataset.a, q = (k) => row.querySelector(`[data-k="${k}"]`);
       if (a === "bm" || a === "bp") { iv.bpm = clamp(iv.bpm + (a === "bp" ? 5 : -5), 20, 300); q("bpm").value = iv.bpm; updateGraph(); }
-      else if (a === "rm" || a === "rp") { iv.bars = clamp(iv.bars + (a === "rp" ? 1 : -1), 1, 999); q("bars").value = iv.bars; updateGraph(); }
-      else if (a === "dm" || a === "dp") { iv.sec = clamp(iv.sec + (a === "dp" ? 15 : -15), 15, 1800); out.textContent = fmtTime(iv.sec); updateGraph(); }
-      else if (a === "tog") { iv.ramp = !iv.ramp; b.classList.toggle("on", iv.ramp); updateGraph(); }
+      else if (a === "rm" || a === "rp") { iv.bars = clamp(iv.bars + (a === "rp" ? 1 : -1), 1, 999); q("bars").value = iv.bars; fixTrans(); updateGraph(); }
+      else if (a === "dm" || a === "dp") { iv.sec = clamp(iv.sec + (a === "dp" ? 15 : -15), 15, 1800); row.querySelector('[data-o="dur"]').textContent = fmtTime(iv.sec); fixTrans(); updateGraph(); }
+      else if (a === "tm" || a === "tp") {
+        if (bars) iv.transBars = clamp(iv.transBars + (a === "tp" ? 1 : -1), 1, Math.max(1, lenOf())); else iv.trans = clamp(iv.trans + (a === "tp" ? 5 : -5), 5, Math.max(5, lenOf()));
+        fixTrans(); updateGraph();
+      }
+      else if (a === "salto" || a === "gradual") { iv.mode = a; renderBody(); }
       else if (a === "dup") { d.intervals.splice(i + 1, 0, { ...iv }); renderBody(); }
       else if (a === "del" && d.intervals.length > 1) { d.intervals.splice(i, 1); renderBody(); }
     }));
@@ -1228,15 +1380,15 @@ function editPractice(existing) {
     b.appendChild(chips([["custom", "Personalizada"], ["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => {
       if (v === "custom" && d.type !== "custom") {
         d.unit = "time";
-        d.intervals = compileSegs(d).flatMap((s) => (s.from === s.to ? [{ bpm: s.to, sec: s.len, ramp: false }]
-          : [{ bpm: s.from, sec: 15, ramp: false }, { bpm: s.to, sec: Math.max(15, s.len - 15), ramp: true }])).slice(0, 20);
-        d.intervals.forEach((iv) => { iv.bars = clamp(Math.round((iv.sec * iv.bpm) / 60 / 4), 1, 512); });
+        d.intervals = compileSegs(d).flatMap((s) => (s.from === s.to ? [{ bpm: s.to, sec: s.len, mode: "salto" }]
+          : [{ bpm: s.from, sec: 15, mode: "salto" }, { bpm: s.to, sec: Math.max(15, s.len - 15), mode: "gradual", trans: Math.max(5, s.len - 15) }])).slice(0, 20);
+        d.intervals.forEach(normIv);
       }
       d.type = v; renderBody();
     }));
     dyn = document.createElement("div");
     b.appendChild(dyn);
-    b.insertAdjacentHTML("beforeend", '<p class="note">Personalizada: cada intervalo tiene su BPM y dura un tiempo o un número de compases. "Gradual" sube o baja suavemente desde el intervalo anterior. Fija: sube en pasos. Progresiva: sube de forma continua.</p>');
+    b.insertAdjacentHTML("beforeend", '<p class="note">Personalizada: cada intervalo tiene su BPM y dura un tiempo o un número de compases. Puede llegar "de golpe" (cambio inmediato) o "gradual" (sube o baja durante el tiempo de transición y luego se mantiene). Fija: sube en pasos. Progresiva: sube de forma continua.</p>');
     renderBody();
   }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
     if (!ok) return;
@@ -1413,6 +1565,8 @@ document.addEventListener("keydown", (e) => {
   else if (e.code === "ArrowUp" || e.code === "ArrowRight") { e.preventDefault(); setBpm(state.bpm + big); }
   else if (e.code === "ArrowDown" || e.code === "ArrowLeft") { e.preventDefault(); setBpm(state.bpm - big); }
   else if (e.code === "KeyT") $("tapBtn").click();
+  else if (e.code === "KeyR") startLast();
+  else if (e.code === "KeyP" && run) togglePlay();
   else if (e.code === "PageUp") setBpm(state.bpm + 10);
   else if (e.code === "PageDown") setBpm(state.bpm - 10);
 });
@@ -1594,5 +1748,6 @@ renderSongs();
 renderPractices();
 renderLog();
 renderSongBar();
+idleStatus();
 renderDrone();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

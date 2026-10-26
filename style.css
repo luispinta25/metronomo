@@ -403,3 +403,38 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 /* Vistas largas con desplazamiento propio */
 #viewSongs, #viewPractice, #viewTuner { overflow-y: auto; padding-bottom: 10px; -webkit-overflow-scrolling: touch; }
 p.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+
+/* ---------- Indicador de tendencia y controles de práctica ---------- */
+.hero.runmode .tname { display: none; }
+.trend { display: flex; align-items: center; gap: 9px; padding: 7px 13px; border-radius: 16px; --tc: var(--muted);
+  color: var(--tc); background: color-mix(in srgb, var(--tc) 16%, transparent); border: 1px solid color-mix(in srgb, var(--tc) 38%, transparent); margin-bottom: 6px; }
+.trend.up { --tc: var(--accent); } .trend.down { --tc: #ff9f43; } .trend.hold { --tc: var(--muted); }
+.trend i { font-size: 18px; }
+.trend b { display: block; font-size: 14px; font-weight: 800; line-height: 1.1; }
+.trend small { display: block; font-size: 11px; font-weight: 600; opacity: .85; }
+.trend.up i { animation: nudgeUp 1.1s ease-in-out infinite; }
+.trend.down i { animation: nudgeDown 1.1s ease-in-out infinite; }
+@keyframes nudgeUp { 0%, 100% { transform: translateY(2px); opacity: .55; } 50% { transform: translateY(-3px); opacity: 1; } }
+@keyframes nudgeDown { 0%, 100% { transform: translateY(-2px); opacity: .55; } 50% { transform: translateY(3px); opacity: 1; } }
+.bpm span { transition: color .35s; }
+.bpm.up span { color: var(--accent); } .bpm.down span { color: #ff9f43; }
+
+.run-ctl { display: flex; gap: 6px; margin-top: 6px; }
+.run-ctl button { flex: 1; height: 38px; border-radius: 12px; background: var(--btn); border: 1px solid var(--btn-border); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.run-ctl button:active { background: var(--btn-press); }
+.run-ctl button.end { color: #e5484d; }
+.lastrun { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border-radius: 15px; background: var(--btn); border: 1px solid var(--btn-border); color: var(--accent); font-size: 13px; font-weight: 700; max-width: 100%; }
+.lastrun span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status { display: flex; align-items: center; justify-content: center; }
+
+.iv-mode { margin-top: 10px; }
+.iv-mode label, .iv-trans label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; margin-bottom: 5px; }
+.seg2 { display: flex; gap: 6px; }
+.seg2 button { flex: 1; height: 40px; border-radius: 12px; background: var(--btn); border: 1px solid var(--btn-border); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.seg2 button.on { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.iv-trans { margin-top: 10px; }
+.iv-mode .note { margin: 6px 0 0; }
+#bpmNum.up { color: var(--accent); } #bpmNum.down { color: #ff9f43; }
+.hero.runmode .bpm span { font-size: clamp(52px, 8dvh, 68px); }
+.trend small { white-space: nowrap; }
+.run-graph { margin-bottom: 8px; }

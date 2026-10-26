@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=12">
+<link rel="stylesheet" href="style.css?v=14">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -50,6 +50,7 @@
           <span id="bpmNum">62</span><small>BPM</small>
         </button>
         <span id="tempoName" class="tname">Adagio</span>
+        <div class="trend" id="trend" hidden><i class="fa-solid fa-equals"></i><div><b></b><small></small></div></div>
       </div>
       <div class="chips-row">
         <button class="chip" id="sigBtn"><i class="fa-solid fa-music"></i><span id="sigTxt">4/4</span></button>
@@ -66,7 +67,7 @@
       <button id="songNext" aria-label="Canción siguiente"><i class="fa-solid fa-forward-step"></i></button>
       <button id="songClose" aria-label="Cerrar"><i class="fa-solid fa-xmark"></i></button>
     </div>
-    <div class="run-graph" id="runGraph" hidden></div>
+    <div class="run-graph" id="runGraph" hidden><div id="rgSvg"></div><div class="run-ctl" id="runCtl"></div></div>
 
     <div class="dial-wrap">
 
@@ -199,6 +200,6 @@
   </div>
 </div>
 
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

@@ -65,6 +65,7 @@ const saved = store.get("metro.state", {});
 const state = Object.assign({
   bpm: 62, num: 4, den: 4, pat: "negra", sound: "click", sound2: null, vol: 0.9, timerMin: 30, levels: [3, 2, 2, 2],
   tStart: false, tStop: true, tRepeat: false, polyOn: false, polyN: 3, group: null,
+  ciOn: false, ciBars: 1, gapOn: false, gapPlay: 4, gapMute: 2, flashOn: false, voiceOn: false,
 }, saved);
 if (saved.sub && !saved.pat) state.pat = OLD_SUB[saved.sub] || "negra";
 delete state.sub;
@@ -138,7 +139,7 @@ function renderAll() {
   renderPolyDots();
   renderPads();
   timerRender();
-  if (wakeLock) $("btnAwake").classList.add("active");
+  refreshMore();
 }
 function renderPolyDots() {
   const box = $("polyDots");
@@ -188,6 +189,7 @@ function setSignature(num, den) {
 let ctx = null, master = null, silentEl = null;
 let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], polyQueue = [];
 let polyNext = 0, polyIdx = 0;
+let barIdx = 0, countLeft = 0, countTotal = 0, halted = false, sessionStart = 0, barHook = null;
 
 function silentWav() {
   const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -255,26 +257,43 @@ function click(time, level) {
 function polyClick(time, first) {
   tone(time, "sine", first ? 1760 : 1320, first ? 0.55 : 0.38, 0.09);
 }
+// Silencios periódicos: suena "gapPlay" compases y se calla "gapMute", en ciclo.
+const isMuted = () => state.gapOn && barIdx % (state.gapPlay + state.gapMute) >= state.gapPlay;
+
 function scheduler() {
-  const p = patOf(state.pat), beatDur = 60 / state.bpm, step = beatDur / p.div;
+  if (halted) return;
   while (nextTime < ctx.currentTime + 0.12) {
+    // Cuenta previa: solo pulsos, sin subdivisiones ni polirritmo.
+    if (countLeft > 0) {
+      const k = countTotal - countLeft, b = k % state.num;
+      click(nextTime, b === 0 ? 3 : 2);
+      visQueue.push({ t: nextTime, beat: b, count: k + 1, total: countTotal });
+      nextTime += 60 / state.bpm;
+      if (--countLeft === 0) { beatIdx = 0; subIdx = 0; barIdx = 0; polyNext = nextTime; polyIdx = 0; }
+      continue;
+    }
+    let p = patOf(state.pat);
     if (beatIdx >= state.num) beatIdx = 0;
     if (subIdx >= p.div) subIdx = 0;
+    // Al inicio de cada compás, una práctica por compases puede cambiar tempo, compás o patrón.
+    if (subIdx === 0 && beatIdx === 0 && barHook && barHook(barIdx) === false) { halted = true; return; }
+    p = patOf(state.pat);
+    const step = 60 / state.bpm / p.div, muted = isMuted();
     if (subIdx === 0) {
       const lv = state.levels[beatIdx];
-      if (p.hits[0] && lv > 0) click(nextTime, lv);
-      visQueue.push({ t: nextTime, beat: beatIdx });
-    } else if (p.hits[subIdx]) {
+      if (!muted && p.hits[0] && lv > 0) click(nextTime, lv);
+      visQueue.push({ t: nextTime, beat: beatIdx, bar: barIdx, muted });
+    } else if (!muted && p.hits[subIdx]) {
       click(nextTime, "sub");
     }
     nextTime += step;
-    if (++subIdx >= p.div) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; }
+    if (++subIdx >= p.div) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; if (beatIdx === 0) barIdx++; }
   }
-  if (state.polyOn) {
-    const pd = (beatDur * state.num) / state.polyN;
+  if (state.polyOn && countLeft === 0) {
+    const pd = (60 / state.bpm * state.num) / state.polyN;
     while (polyNext < ctx.currentTime + 0.12) {
       if (polyIdx >= state.polyN) polyIdx = 0;
-      polyClick(polyNext, polyIdx === 0);
+      if (!isMuted()) polyClick(polyNext, polyIdx === 0);
       polyQueue.push({ t: polyNext, i: polyIdx });
       polyNext += pd;
       polyIdx = (polyIdx + 1) % state.polyN;
@@ -283,11 +302,28 @@ function scheduler() {
 }
 function visLoop() {
   if (!running) return;
-  while (visQueue.length && visQueue[0].t <= ctx.currentTime) flash(visQueue.shift().beat);
+  while (visQueue.length && visQueue[0].t <= ctx.currentTime) flashEntry(visQueue.shift());
   while (polyQueue.length && polyQueue[0].t <= ctx.currentTime) flashPoly(polyQueue.shift().i);
   requestAnimationFrame(visLoop);
 }
-function flash(i) {
+const NUM_WORDS = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciséis"];
+function say(n) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(NUM_WORDS[n] || String(n));
+    u.lang = "es-ES"; u.rate = 1.6; u.volume = Math.min(1, state.vol * 1.3);
+    speechSynthesis.speak(u);
+  } catch { /* sin voz disponible */ }
+}
+function screenFlash(strength) {
+  const el = $("flash");
+  el.style.setProperty("--fo", strength);
+  el.classList.remove("go");
+  void el.offsetWidth;
+  el.classList.add("go");
+}
+function beatUI(i) {
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   const c = document.querySelector(`.col[data-i="${i}"]`);
   if (c) c.classList.add("beat");
@@ -298,6 +334,24 @@ function flash(i) {
   core.classList.add("pulse");
   setTimeout(() => core.classList.remove("pulse"), 90);
   swingPhase = swingBeat++;
+}
+function flashEntry(e) {
+  beatUI(e.beat);
+  if (e.count) {
+    $("status").textContent = `Cuenta previa ${e.count} de ${e.total}`;
+    if (state.flashOn) screenFlash(e.beat === 0 ? 0.5 : 0.28);
+    if (state.voiceOn) say(e.beat + 1);
+    return;
+  }
+  if (run) {
+    run.curBeat = e.beat;
+    if (run.t0 === null && run.unit === "time") run.t0 = performance.now();
+  } else if (state.gapOn) {
+    $("status").textContent = e.muted ? `En silencio, compás ${e.bar + 1}` : `Sonando, compás ${e.bar + 1}`;
+  }
+  if (e.muted) return;
+  if (state.flashOn) screenFlash(e.beat === 0 ? 0.5 : 0.28);
+  if (state.voiceOn) say(e.beat + 1);
 }
 function setPlayUI(on) {
   document.querySelectorAll(".js-play").forEach((b) => {
@@ -314,10 +368,13 @@ function flashPoly(i) {
 function start() {
   if (running) return;
   ensureAudio();
-  running = true;
-  beatIdx = 0; subIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
+  running = true; halted = false;
+  beatIdx = 0; subIdx = 0; barIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
+  countTotal = state.ciOn ? state.ciBars * state.num : 0;
+  countLeft = countTotal;
   nextTime = ctx.currentTime + 0.08;
   polyNext = nextTime;
+  sessionStart = performance.now();
   timerId = setInterval(scheduler, 25);
   scheduler();
   swingBeat = 0; swingPhase = 0;
@@ -328,8 +385,11 @@ function stop() {
   if (!running) return;
   running = false;
   clearInterval(timerId);
+  logSession(run ? run.p.name : "Metrónomo libre", (performance.now() - sessionStart) / 1000);
+  barHook = null; halted = false; countLeft = 0;
   if (run) { clearInterval(runId); run = null; }
-  if (silentEl && !tRunning) silentEl.pause();
+  if (silentEl && !tRunning && !droneOn) silentEl.pause();
+  try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch { /* sin voz */ }
   document.querySelectorAll(".col.beat").forEach((c) => c.classList.remove("beat"));
   document.querySelectorAll("#polyDots .on").forEach((c) => c.classList.remove("on"));
   document.querySelectorAll("#orbDots .on").forEach((c) => c.classList.remove("on"));
@@ -395,10 +455,10 @@ function sheet(title, build, actions) {
     $("sheetTitle").textContent = title;
     const body = $("sheetBody");
     body.innerHTML = "";
-    build(body);
+    const close = (v) => { $("backdrop").hidden = true; resolve(v); };
+    build(body, close);
     const act = $("sheetActions");
     act.innerHTML = "";
-    const close = (v) => { $("backdrop").hidden = true; resolve(v); };
     actions.forEach((a) => {
       const b = document.createElement("button");
       b.textContent = a.label;
@@ -545,18 +605,6 @@ $("btnVol").addEventListener("click", () => {
     b.appendChild(r);
   }, [{ label: "Listo", cls: "primary", value: true }]);
 });
-let wakeLock = null;
-$("btnAwake").addEventListener("click", async () => {
-  if (wakeLock) { try { await wakeLock.release(); } catch { /* ya liberado */ } wakeLock = null; $("btnAwake").classList.remove("active"); return; }
-  try {
-    wakeLock = await navigator.wakeLock.request("screen");
-    wakeLock.addEventListener("release", () => { wakeLock = null; $("btnAwake").classList.remove("active"); });
-    $("btnAwake").classList.add("active");
-  } catch {
-    sheet("Pantalla encendida", (b) => { b.innerHTML = '<p class="note">Este dispositivo no permite mantener la pantalla encendida.</p>'; },
-      [{ label: "Entendido", cls: "primary", value: true }]);
-  }
-});
 $("btnTheme").addEventListener("click", () => {
   sheet("Tema", (b) => {
     const g = document.createElement("div");
@@ -669,45 +717,248 @@ document.querySelectorAll(".tab[data-view]").forEach((t) => t.addEventListener("
 }));
 function showView(id) { document.querySelector(`.tab[data-view="${id}"]`).click(); }
 
+// Menú de acciones: una lista de botones; resuelve con el valor del elegido.
+function menuSheet(title, items) {
+  return sheet(title, (b, close) => {
+    const list = document.createElement("div");
+    list.className = "menu";
+    items.forEach((it) => {
+      const btn = document.createElement("button");
+      btn.className = "menu-btn" + (it.danger ? " danger" : "");
+      btn.innerHTML = `<i class="fa-solid fa-${it.icon}"></i><span></span>`;
+      btn.querySelector("span").textContent = it.label;
+      btn.onclick = () => close(it.value);
+      list.appendChild(btn);
+    });
+    b.appendChild(list);
+  }, [{ label: "Cerrar", value: null }]);
+}
+function askText(title, placeholder, value = "") {
+  let inp;
+  return sheet(title, (b) => {
+    inp = document.createElement("input");
+    inp.type = "text"; inp.placeholder = placeholder; inp.maxLength = 40; inp.value = value;
+    b.appendChild(inp);
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+  }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => (ok ? inp.value.trim() : null));
+}
+
+songs.forEach((s, i) => { if (!s.id) s.id = Date.now() + i; });
+let currentSong = null;
+const songIdx = () => songs.findIndex((s) => s.id === currentSong);
+const saveSongs = () => store.set("metro.songs", songs);
+
+function loadSong(s) {
+  Object.assign(state, {
+    bpm: s.bpm, num: s.num, den: s.den, pat: songPat(s), levels: normalizeLevels(s.levels, s.num),
+    polyOn: !!s.polyOn, polyN: s.polyN || 3, group: null,
+    ...(s.sound && SOUNDS[s.sound] ? { sound: s.sound, sound2: SOUNDS[s.sound2] ? s.sound2 : null } : {}),
+  });
+  currentSong = s.id;
+  persist(); renderAll(); renderSongBar();
+}
+function renderSongBar() {
+  const bar = $("songBar"), i = songIdx();
+  bar.hidden = i < 0;
+  if (i < 0) return;
+  $("songBarName").textContent = songs[i].name;
+  $("songBarPos").textContent = `${i + 1} de ${songs.length}`;
+  $("songPrev").disabled = i === 0;
+  $("songNext").disabled = i === songs.length - 1;
+}
+$("songPrev").onclick = () => { const i = songIdx(); if (i > 0) loadSong(songs[i - 1]); };
+$("songNext").onclick = () => { const i = songIdx(); if (i >= 0 && i < songs.length - 1) loadSong(songs[i + 1]); };
+$("songClose").onclick = () => { currentSong = null; renderSongBar(); };
+
+function songSnapshot() {
+  return { bpm: state.bpm, num: state.num, den: state.den, pat: state.pat, levels: [...state.levels], polyOn: state.polyOn, polyN: state.polyN, sound: state.sound, sound2: state.sound2 };
+}
 function renderSongs() {
   const ul = $("songList");
   ul.innerHTML = "";
   $("songEmpty").hidden = songs.length > 0;
-  songs.forEach((s, i) => {
+  songs.forEach((s) => {
     const li = document.createElement("li");
-    li.innerHTML = '<button class="info"><div class="nm"></div><div class="meta"></div></button><button class="del" aria-label="Eliminar"><i class="fa-solid fa-trash"></i></button>';
+    const secs = s.sections && s.sections.length;
+    li.innerHTML = `<button class="info"><div class="nm"></div><div class="meta"></div></button>${secs ? '<button class="splay" aria-label="Reproducir secciones"><i class="fa-solid fa-play"></i></button>' : ""}<button class="del" aria-label="Opciones"><i class="fa-solid fa-ellipsis"></i></button>`;
     li.querySelector(".nm").textContent = s.name;
-    li.querySelector(".meta").textContent = `${s.bpm} BPM, ${s.num}/${s.den}, ${patOf(songPat(s)).name}${s.polyOn ? `, poli ${s.polyN}:${s.num}` : ""}`;
-    li.querySelector(".info").onclick = () => {
-      Object.assign(state, {
-        bpm: s.bpm, num: s.num, den: s.den, pat: songPat(s), levels: normalizeLevels(s.levels, s.num),
-        polyOn: !!s.polyOn, polyN: s.polyN || 3, group: null,
-        ...(s.sound && SOUNDS[s.sound] ? { sound: s.sound, sound2: SOUNDS[s.sound2] ? s.sound2 : null } : {}),
-      });
-      persist(); renderAll(); showView("viewMetro");
-    };
-    li.querySelector(".del").onclick = async () => {
-      if (await askConfirm("Eliminar ajuste", `Se eliminará "${s.name.replace(/</g, "&lt;")}" del repertorio.`)) {
-        songs.splice(i, 1); store.set("metro.songs", songs); renderSongs();
-      }
-    };
+    li.querySelector(".meta").textContent = `${s.bpm} BPM, ${s.num}/${s.den}, ${patOf(songPat(s)).name}${s.polyOn ? `, poli ${s.polyN}:${s.num}` : ""}${secs ? `, ${s.sections.length} secciones` : ""}`;
+    li.querySelector(".info").onclick = () => { loadSong(s); showView("viewMetro"); };
+    if (secs) li.querySelector(".splay").onclick = () => startSong(s);
+    li.querySelector(".del").onclick = () => songMenu(s);
     ul.appendChild(li);
   });
 }
-$("saveCur").addEventListener("click", () => {
-  let inp;
-  sheet("Guardar ajuste", (b) => {
-    inp = document.createElement("input");
-    inp.type = "text"; inp.placeholder = "Nombre de la pieza"; inp.maxLength = 40;
-    b.appendChild(inp);
-    setTimeout(() => inp.focus(), 60);
-  }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
-    const name = inp.value.trim();
-    if (!ok || !name) return;
-    songs.unshift({ name, bpm: state.bpm, num: state.num, den: state.den, pat: state.pat, levels: [...state.levels], polyOn: state.polyOn, polyN: state.polyN, sound: state.sound, sound2: state.sound2 });
-    store.set("metro.songs", songs); renderSongs();
-  });
+async function songMenu(s) {
+  const i = songs.indexOf(s);
+  const items = [{ icon: "folder-open", label: "Cargar", value: "load" }];
+  if (s.sections && s.sections.length) items.push({ icon: "play", label: "Reproducir con secciones", value: "play" });
+  items.push({ icon: "list-ol", label: "Editar secciones", value: "sections" },
+    { icon: "arrows-rotate", label: "Actualizar con los ajustes actuales", value: "update" },
+    { icon: "pen", label: "Renombrar", value: "rename" });
+  if (i > 0) items.push({ icon: "arrow-up", label: "Subir en la lista", value: "up" });
+  if (i < songs.length - 1) items.push({ icon: "arrow-down", label: "Bajar en la lista", value: "down" });
+  items.push({ icon: "trash", label: "Eliminar", value: "del", danger: true });
+  const r = await menuSheet(s.name, items);
+  if (r === "load") { loadSong(s); showView("viewMetro"); }
+  else if (r === "play") startSong(s);
+  else if (r === "sections") editSections(s);
+  else if (r === "update") { Object.assign(s, songSnapshot()); saveSongs(); renderSongs(); }
+  else if (r === "rename") { const n = await askText("Renombrar", "Nombre de la pieza", s.name); if (n) { s.name = n; saveSongs(); renderSongs(); renderSongBar(); } }
+  else if (r === "up" || r === "down") { songs.splice(i, 1); songs.splice(i + (r === "up" ? -1 : 1), 0, s); saveSongs(); renderSongs(); renderSongBar(); }
+  else if (r === "del" && (await askConfirm("Eliminar ajuste", `Se eliminará "${s.name.replace(/</g, "&lt;")}" del repertorio.`))) {
+    songs.splice(i, 1); if (currentSong === s.id) currentSong = null;
+    saveSongs(); renderSongs(); renderSongBar();
+  }
+}
+$("saveCur").addEventListener("click", async () => {
+  const name = await askText("Guardar ajuste", "Nombre de la pieza");
+  if (!name) return;
+  songs.unshift({ id: Date.now(), name, ...songSnapshot() });
+  saveSongs(); renderSongs();
 });
+
+/* Secciones de una canción: cada una cambia tempo, compás y patrón durante N compases. */
+const compileSections = (secs) => secs.map((m) => ({ from: m.bpm, to: m.bpm, len: clamp(m.bars, 1, 999), meta: m }));
+function applySection(m) {
+  const [n, d] = String(m.sig || "4/4").split("/").map(Number);
+  state.num = clamp(n || 4, 1, 16); state.den = d || 4;
+  state.levels = normalizeLevels(state.levels, state.num);
+  state.pat = PATTERNS.some((p) => p.id === m.pat) ? m.pat : "negra";
+  renderAll();
+}
+function editSections(s) {
+  const secs = JSON.parse(JSON.stringify(s.sections && s.sections.length ? s.sections
+    : [{ name: "Sección 1", bars: 8, bpm: s.bpm, sig: `${s.num}/${s.den}`, pat: songPat(s) }]));
+  let list, gbox;
+  const redrawGraph = () => {
+    const segs = compileSections(secs);
+    gbox.innerHTML = graphSVG(segs, { h: 130, unit: "bars" }) + `<p class="note">Total ${planTotal(segs)} compases, ${secs.length} secciones</p>`;
+  };
+  const sigOptions = (cur) => [...new Set([cur, ...COMMON_SIGS.map(([a, c]) => `${a}/${c}`)])];
+  const renderList = () => {
+    list.innerHTML = "";
+    secs.forEach((m, i) => {
+      const row = document.createElement("div");
+      row.className = "iv";
+      row.innerHTML = `<div class="iv-top"><span class="iv-n">${i + 1}</span><input class="sec-name" type="text" maxlength="30" placeholder="Nombre de la sección"></div>
+        <div class="iv-top sec-mid">
+          <div class="iv-f"><label>BPM</label><div class="mst"><button data-a="bm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bpm" type="tel" inputmode="numeric" maxlength="3" value="${m.bpm}"><button data-a="bp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>
+          <div class="iv-f"><label>Compases</label><div class="mst"><button data-a="rm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bars" type="tel" inputmode="numeric" maxlength="3" value="${m.bars}"><button data-a="rp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>
+        </div>
+        <div class="iv-top sec-mid">
+          <div class="iv-f"><label>Compás</label><select class="dd" data-k="sig">${sigOptions(m.sig).map((x) => `<option${x === m.sig ? " selected" : ""}>${x}</option>`).join("")}</select></div>
+          <div class="iv-f"><label>Subdivisión</label><select class="dd" data-k="pat">${PATTERNS.map((p) => `<option value="${p.id}"${p.id === m.pat ? " selected" : ""}>${p.name}</option>`).join("")}</select></div>
+        </div>
+        <div class="iv-bot"><button data-a="dup"><i class="fa-solid fa-copy"></i> Duplicar</button><button data-a="del"${secs.length === 1 ? " disabled" : ""}><i class="fa-solid fa-trash"></i> Quitar</button></div>`;
+      const nm = row.querySelector(".sec-name");
+      nm.value = m.name || "";
+      nm.addEventListener("input", () => { m.name = nm.value; });
+      row.querySelectorAll("input.iv-in").forEach((inp) => {
+        const k = inp.dataset.k, lo = k === "bpm" ? 20 : 1, hi = k === "bpm" ? 300 : 999;
+        inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= lo && v <= hi) { m[k] = v; redrawGraph(); } });
+        inp.addEventListener("change", () => { m[k] = clamp(parseInt(inp.value, 10) || m[k], lo, hi); inp.value = m[k]; redrawGraph(); });
+      });
+      row.querySelectorAll("select").forEach((sel) => sel.addEventListener("change", () => { m[sel.dataset.k] = sel.value; }));
+      row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+        const a = b.dataset.a, q = (k) => row.querySelector(`[data-k="${k}"]`);
+        if (a === "bm" || a === "bp") { m.bpm = clamp(m.bpm + (a === "bp" ? 5 : -5), 20, 300); q("bpm").value = m.bpm; redrawGraph(); }
+        else if (a === "rm" || a === "rp") { m.bars = clamp(m.bars + (a === "rp" ? 1 : -1), 1, 999); q("bars").value = m.bars; redrawGraph(); }
+        else if (a === "dup") { secs.splice(i + 1, 0, { ...m, name: m.name ? m.name + " (copia)" : "" }); renderList(); }
+        else if (a === "del" && secs.length > 1) { secs.splice(i, 1); renderList(); }
+      }));
+      list.appendChild(row);
+    });
+    const add = document.createElement("button");
+    add.className = "btn-wide"; add.innerHTML = '<i class="fa-solid fa-plus"></i> Añadir sección';
+    add.disabled = secs.length >= 30;
+    add.onclick = () => { const l = secs[secs.length - 1]; secs.push({ ...l, name: `Sección ${secs.length + 1}` }); renderList(); };
+    list.appendChild(add);
+    redrawGraph();
+  };
+  sheet(`Secciones: ${s.name}`, (b) => {
+    gbox = document.createElement("div"); gbox.className = "pgraph-edit";
+    list = document.createElement("div");
+    b.append(gbox, list);
+    b.insertAdjacentHTML("beforeend", '<p class="note">Al reproducir, cada sección dura sus compases y aplica su tempo, compás y subdivisión.</p>');
+    renderList();
+  }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
+    if (!ok) return;
+    secs.forEach((m, i) => { if (!m.name || !m.name.trim()) m.name = `Sección ${i + 1}`; });
+    s.sections = secs; saveSongs(); renderSongs();
+  });
+}
+function startSong(s) {
+  if (!s.sections || !s.sections.length) return;
+  loadSong(s);
+  startRun({ name: s.name, id: "song" + s.id }, compileSections(s.sections), "bars");
+}
+
+/* ---------- Copia de seguridad (archivo local) ---------- */
+const BACKUP_KEYS = ["metro.state", "metro.songs", "metro.practices", "metro.log", "metro.theme", "metro.ctl"];
+async function exportData() {
+  const data = {};
+  BACKUP_KEYS.forEach((k) => { const v = store.get(k, undefined); if (v !== undefined) data[k] = v; });
+  const text = JSON.stringify({ app: "lpsolutions-metronomo", v: 1, saved: new Date().toISOString(), data }, null, 2);
+  const name = `metronomo-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+  const file = new File([text], name, { type: "application/json" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Respaldo del metrónomo" }); return; }
+  } catch (e) { if (e && e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function importData() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = "application/json,.json";
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    let obj;
+    try { obj = JSON.parse(await f.text()); } catch { obj = null; }
+    if (!obj || obj.app !== "lpsolutions-metronomo" || typeof obj.data !== "object") {
+      await sheet("Archivo no válido", (b) => { b.innerHTML = '<p class="note">Este archivo no es un respaldo del metrónomo.</p>'; }, [{ label: "Entendido", cls: "primary", value: true }]);
+      return;
+    }
+    const ok = await askConfirm("Restaurar respaldo", "Se reemplazarán tus ajustes, repertorio, prácticas e historial actuales por los del archivo.", "Restaurar");
+    if (!ok) return;
+    BACKUP_KEYS.forEach((k) => { if (k in obj.data) store.set(k, obj.data[k]); });
+    location.reload();
+  };
+  inp.click();
+}
+$("btnExport").addEventListener("click", exportData);
+$("btnImport").addEventListener("click", importData);
+
+/* ---------- Registro de sesiones ---------- */
+let sessionLog = store.get("metro.log", []);
+function logSession(name, sec) {
+  if (!(sec >= 20)) return;
+  sessionLog.push({ ts: Date.now(), name, sec: Math.round(sec), bpm: state.bpm });
+  if (sessionLog.length > 300) sessionLog = sessionLog.slice(-300);
+  store.set("metro.log", sessionLog);
+  renderLog();
+}
+function renderLog() {
+  const box = $("logBox");
+  if (!box) return;
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  const weekStart = day.getTime() - ((day.getDay() + 6) % 7) * 86400000;
+  const sum = (from) => sessionLog.filter((e) => e.ts >= from).reduce((a, e) => a + e.sec, 0);
+  const mins = (s) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.round(s / 60)} min`);
+  const recent = sessionLog.slice(-8).reverse();
+  box.innerHTML = `<h3>Historial</h3>
+    <div class="stats"><div><b>${mins(sum(day.getTime()))}</b><span>Hoy</span></div><div><b>${mins(sum(weekStart))}</b><span>Esta semana</span></div><div><b>${sessionLog.length}</b><span>Sesiones</span></div></div>
+    <ul class="logl">${recent.map((e) => `<li><span class="ln"></span><span class="lm">${new Date(e.ts).toLocaleDateString("es-EC", { day: "numeric", month: "short" })}, ${e.sec >= 60 ? `${Math.floor(e.sec / 60)} min${e.sec % 60 ? ` ${e.sec % 60} s` : ""}` : `${e.sec} s`}</span></li>`).join("")}</ul>
+    ${sessionLog.length ? '<button class="btn-wide" id="clearLog"><i class="fa-solid fa-trash"></i> Borrar historial</button>' : '<p class="empty">Aún no hay sesiones. Se guardan las de 20 segundos o más.</p>'}`;
+  box.querySelectorAll(".logl li").forEach((li, i) => { li.querySelector(".ln").textContent = recent[i].name; });
+  const clr = $("clearLog");
+  if (clr) clr.onclick = async () => {
+    if (await askConfirm("Borrar historial", "Se eliminarán todas las sesiones registradas.", "Borrar")) { sessionLog = []; store.set("metro.log", sessionLog); renderLog(); }
+  };
+}
 
 /* ---------- Modo de práctica ---------- */
 let practices = store.get("metro.practices", null);
@@ -715,51 +966,54 @@ if (!practices) {
   practices = [
     { id: 1, name: "Práctica de velocidad fija", type: "fija", from: 80, to: 120, steps: 4, min: 1, last: 0 },
     { id: 2, name: "Práctica de velocidad progresiva", type: "progresiva", from: 75, to: 150, steps: 6, min: 6, last: 0 },
-    { id: 3, name: "Intervalos 120, 100, 140", type: "custom", last: 0,
-      intervals: [{ bpm: 120, sec: 60, ramp: false }, { bpm: 100, sec: 60, ramp: false }, { bpm: 140, sec: 60, ramp: false }] },
+    { id: 3, name: "Intervalos 120, 100, 140", type: "custom", unit: "time", last: 0,
+      intervals: [{ bpm: 120, sec: 60, bars: 8, ramp: false }, { bpm: 100, sec: 60, bars: 8, ramp: false }, { bpm: 140, sec: 60, bars: 8, ramp: false }] },
   ];
   store.set("metro.practices", practices);
 }
 const savePractices = () => store.set("metro.practices", practices);
+const fmtLen = (unit, v) => (unit === "bars" ? `${Math.round(v)} comp.` : fmtTime(Math.round(v)));
+const unitOf = (p) => (p.type === "custom" && p.unit === "bars" ? "bars" : "time");
 
-// Toda práctica se reduce a tramos {from, to, sec}: constante si from == to, gradual si no.
+// Toda práctica se reduce a tramos {from, to, len}: constante si from == to, gradual si no.
+// len son segundos o compases según la unidad.
 function compileSegs(p) {
   if (p.type === "custom") {
-    const iv = p.intervals || [];
-    return iv.map((x, i) => ({ from: x.ramp && i > 0 ? iv[i - 1].bpm : x.bpm, to: x.bpm, sec: x.sec }));
+    const iv = p.intervals || [], bars = p.unit === "bars";
+    return iv.map((x, i) => ({ from: x.ramp && i > 0 ? iv[i - 1].bpm : x.bpm, to: x.bpm, len: bars ? x.bars || 4 : x.sec }));
   }
   if (p.type === "fija") {
     return Array.from({ length: p.steps }, (_, i) => {
       const b = Math.round(p.from + ((p.to - p.from) * i) / Math.max(1, p.steps - 1));
-      return { from: b, to: b, sec: p.min * 60 };
+      return { from: b, to: b, len: p.min * 60 };
     });
   }
-  return [{ from: p.from, to: p.to, sec: p.min * 60 }];
+  return [{ from: p.from, to: p.to, len: p.min * 60 }];
 }
-const planTotal = (segs) => segs.reduce((a, s) => a + s.sec, 0);
+const planTotal = (segs) => segs.reduce((a, s) => a + s.len, 0);
 function planAt(segs, el) {
   let t = 0;
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
-    if (el < t + s.sec || i === segs.length - 1) {
-      const f = s.sec ? clamp((el - t) / s.sec, 0, 1) : 1;
+    if (el < t + s.len || i === segs.length - 1) {
+      const f = s.len ? clamp((el - t) / s.len, 0, 1) : 1;
       return { bpm: Math.round(s.from + (s.to - s.from) * f), idx: i + 1, count: segs.length };
     }
-    t += s.sec;
+    t += s.len;
   }
   return { bpm: state.bpm, idx: 0, count: 0 };
 }
 function practiceMeta(p) {
-  const segs = compileSegs(p), all = segs.flatMap((s) => [s.from, s.to]);
-  const lo = Math.min(...all), hi = Math.max(...all), tot = fmtTime(planTotal(segs));
+  const segs = compileSegs(p), all = segs.flatMap((s) => [s.from, s.to]), unit = unitOf(p);
+  const lo = Math.min(...all), hi = Math.max(...all), tot = fmtLen(unit, planTotal(segs));
   if (p.type === "custom") return `${segs.length} ${segs.length === 1 ? "intervalo" : "intervalos"}, ${lo} - ${hi} BPM, ${tot}`;
   if (p.type === "fija") return `${p.from} - ${p.to} BPM, ${p.steps} pasos de ${p.min} min`;
   return `${p.from} - ${p.to} BPM, ${p.min} min en total`;
 }
 
-/* Gráfico de curva del tempo en el tiempo */
+/* Gráfico de curva del tempo */
 let graphN = 0;
-function graphSVG(segs, { h = 120, labels = true, axis = true } = {}) {
+function graphSVG(segs, { h = 120, labels = true, axis = true, unit = "time" } = {}) {
   const W = 320, L = axis ? 30 : 6, R = 8, T = labels ? 26 : 8, B = axis ? 18 : 6;
   const total = planTotal(segs) || 1;
   const vals = segs.flatMap((s) => [s.from, s.to]);
@@ -770,16 +1024,16 @@ function graphSVG(segs, { h = 120, labels = true, axis = true } = {}) {
   const Y = (b) => T + (h - T - B) * (1 - (b - lo) / (hi - lo));
   const raw = (t) => {
     let a = 0;
-    for (const s of segs) { if (t <= a + s.sec) return s.from + (s.to - s.from) * (s.sec ? (t - a) / s.sec : 1); a += s.sec; }
+    for (const s of segs) { if (t <= a + s.len) return s.from + (s.to - s.from) * (s.len ? (t - a) / s.len : 1); a += s.len; }
     return segs[segs.length - 1].to;
   };
   // Se suavizan las transiciones para que la línea se lea como una curva.
-  const wd = Math.min(total * 0.06, 10), n = 200, taps = 16, pts = [];
+  const wd = Math.min(total * 0.06, unit === "bars" ? total * 0.06 : 10), n = 200, taps = 16, pts = [];
   for (let i = 0; i <= n; i++) {
     const t = (total * i) / n;
     let sum = 0, wsum = 0;
     for (let k = -taps; k <= taps; k++) {
-      const wgt = 1 - Math.abs(k) / (taps + 1); // ventana triangular: bordes redondeados
+      const wgt = 1 - Math.abs(k) / (taps + 1);
       sum += wgt * raw(clamp(t + (wd * k) / taps, 0, total)); wsum += wgt;
     }
     pts.push([X(t), Y(sum / wsum)]);
@@ -792,7 +1046,7 @@ function graphSVG(segs, { h = 120, labels = true, axis = true } = {}) {
   if (axis) {
     const top = Math.round(hi - pad), bot = Math.round(lo + pad), mid = Math.round((top + bot) / 2);
     [top, mid, bot].forEach((v) => { s += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text x="${L - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${v}</text>`; });
-    s += `<text x="${L}" y="${h - 4}" text-anchor="start">0:00</text><text x="${W - R}" y="${h - 4}" text-anchor="end">${fmtTime(Math.round(total))}</text>`;
+    s += `<text x="${L}" y="${h - 4}" text-anchor="start">${unit === "bars" ? "1" : "0:00"}</text><text x="${W - R}" y="${h - 4}" text-anchor="end">${fmtLen(unit, total)}</text>`;
   }
   s += `<path d="${d} L${X(total).toFixed(1)} ${base} L${L} ${base} Z" fill="url(#ag${id})"/>` +
     `<path d="${d}" fill="none" stroke="url(#lg${id})" stroke-width="${axis ? 3.2 : 4.6}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -800,7 +1054,7 @@ function graphSVG(segs, { h = 120, labels = true, axis = true } = {}) {
     let a = 0;
     const step = segs.length > 14 ? 3 : segs.length > 8 ? 2 : 1;
     segs.forEach((sg, i) => {
-      const tm = a + sg.sec / 2; a += sg.sec;
+      const tm = a + sg.len / 2; a += sg.len;
       const x = X(tm), y = Y(raw(tm));
       s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.6" class="pin"/>`;
       if (i % step === 0) s += `<text class="lbl" x="${x.toFixed(1)}" y="${(y - 9).toFixed(1)}" text-anchor="middle">${Math.round(sg.to)}</text>`;
@@ -818,32 +1072,56 @@ function setCursor(root, frac) {
   c.style.opacity = 1;
 }
 
+/* Ejecución de una práctica o de una canción con secciones */
 let run = null, runId = null;
-function startPractice(p) {
+function startPractice(p) { startRun(p, compileSegs(p), unitOf(p)); }
+function startRun(p, segs, unit) {
   if (running) stop();
   showView("viewMetro");
-  const segs = compileSegs(p);
-  run = { p, segs, total: planTotal(segs), t0: performance.now() };
+  run = { p, segs, unit, total: planTotal(segs), t0: unit === "time" && !state.ciOn ? performance.now() : null, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0 };
+  barHook = unit === "bars" ? runBarHook : null;
+  if (unit === "time") setBpm(planAt(segs, 0).bpm);
   const rg = $("runGraph");
-  rg.innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false });
+  rg.innerHTML = graphSVG(segs, { h: 78, labels: true, axis: false, unit });
   rg.hidden = false;
   start();
   practiceTick();
   runId = setInterval(practiceTick, 250);
 }
+// Se ejecuta al inicio de cada compás dentro del programador de audio.
+function runBarHook(bar) {
+  if (!run || run.unit !== "bars") return true;
+  if (bar >= run.total) { run.endAt = nextTime; return false; }
+  const { bpm, idx } = planAt(run.segs, bar);
+  if (state.bpm !== bpm) { state.bpm = bpm; renderBpm(); }
+  if (run.lastIdx !== idx) { run.lastIdx = idx; const seg = run.segs[idx - 1]; if (seg && seg.meta) applySection(seg.meta); }
+  run.bar = bar; run.idx = idx;
+  return true;
+}
+function finishRun() {
+  const p = run.p;
+  p.last = Date.now(); savePractices(); renderPractices();
+  chime(); stop();
+  $("status").textContent = "Práctica completada";
+}
 function practiceTick() {
   if (!run) return;
-  const { p, segs, total } = run, el = (performance.now() - run.t0) / 1000;
-  if (el >= total) {
-    p.last = Date.now(); savePractices(); renderPractices();
-    chime(); stop();
-    $("status").textContent = "Práctica completada";
-    return;
+  const { p, segs, total, unit } = run;
+  let el;
+  if (unit === "bars") {
+    if (run.endAt) { if (ctx.currentTime >= run.endAt) finishRun(); return; }
+    if (run.idx === null) return; // aún en cuenta previa
+    el = run.bar + run.curBeat / state.num;
+  } else {
+    if (run.t0 === null) return;
+    el = (performance.now() - run.t0) / 1000;
+    if (el >= total) { finishRun(); return; }
+    setBpm(planAt(segs, el).bpm);
   }
-  const { bpm, idx, count } = planAt(segs, el);
-  setBpm(bpm);
-  const left = fmtTime(Math.ceil(total - el));
-  $("status").textContent = (count > 1 ? `Intervalo ${idx}/${count}, ` : "Gradual, ") + `${bpm} BPM, quedan ${left}`;
+  const { idx, count } = planAt(segs, el), seg = segs[idx - 1];
+  const left = unit === "bars" ? `${Math.max(0, total - Math.floor(el))} comp.` : fmtTime(Math.ceil(total - el));
+  const label = seg && seg.meta && seg.meta.name ? seg.meta.name : count > 1 ? `Intervalo ${idx}/${count}` : "Gradual";
+  $("status").textContent = `${label}, ${state.bpm} BPM, quedan ${left}`;
   setCursor($("runGraph"), el / total);
   setCursor(document.querySelector(`.pcard[data-id="${p.id}"]`), el / total);
 }
@@ -860,7 +1138,7 @@ function renderPractices() {
     const card = document.createElement("div");
     card.className = "pcard";
     card.dataset.id = p.id;
-    card.innerHTML = `<div class="ptop"><div class="pinfo"><div class="pname"></div><div class="pmeta"></div></div><div class="pg">${graphSVG(compileSegs(p), { h: 100, labels: false, axis: false })}</div></div>
+    card.innerHTML = `<div class="ptop"><div class="pinfo"><div class="pname"></div><div class="pmeta"></div></div><div class="pg">${graphSVG(compileSegs(p), { h: 100, labels: false, axis: false, unit: unitOf(p) })}</div></div>
       <div class="pfoot"><span class="plast">Última práctica: ${last}</span><button class="pmore" aria-label="Opciones"><i class="fa-solid fa-ellipsis"></i></button><button class="pplay" aria-label="Iniciar práctica"><i class="fa-solid fa-play"></i></button></div>`;
     card.querySelector(".pname").textContent = p.name;
     card.querySelector(".pmeta").textContent = practiceMeta(p);
@@ -871,7 +1149,7 @@ function renderPractices() {
   $("practiceEmpty").hidden = practices.length > 0;
 }
 async function practiceMenu(p) {
-  const r = await sheet(p.name, (b) => { b.innerHTML = `<div class="pgraph-edit">${graphSVG(compileSegs(p), { h: 130 })}</div><p class="note">${practiceMeta(p)}</p>`; }, [
+  const r = await sheet(p.name, (b) => { b.innerHTML = `<div class="pgraph-edit">${graphSVG(compileSegs(p), { h: 130, unit: unitOf(p) })}</div><p class="note">${practiceMeta(p)}</p>`; }, [
     { label: "Editar", value: "edit" }, { label: "Eliminar", cls: "danger", value: "del" }, { label: "Cerrar", value: null },
   ]);
   if (r === "edit") editPractice(p);
@@ -880,24 +1158,29 @@ async function practiceMenu(p) {
   }
 }
 
-const SEED_IV = [{ bpm: 120, sec: 60, ramp: false }, { bpm: 100, sec: 60, ramp: false }, { bpm: 140, sec: 60, ramp: false }];
+const SEED_IV = [{ bpm: 120, sec: 60, bars: 8, ramp: false }, { bpm: 100, sec: 60, bars: 8, ramp: false }, { bpm: 140, sec: 60, bars: 8, ramp: false }];
 function editPractice(existing) {
   const d = JSON.parse(JSON.stringify(Object.assign(
-    { name: "", type: "custom", from: 80, to: 120, steps: 4, min: 1, intervals: SEED_IV }, existing || {})));
+    { name: "", type: "custom", unit: "time", from: 80, to: 120, steps: 4, min: 1, intervals: SEED_IV }, existing || {})));
+  d.intervals.forEach((iv) => { if (!iv.bars) iv.bars = clamp(Math.round(((iv.sec || 60) * iv.bpm) / 60 / 4), 1, 512); if (!iv.sec) iv.sec = 60; });
   let nameInp, gbox, dyn;
   const updateGraph = () => {
-    const segs = compileSegs(d);
-    gbox.innerHTML = graphSVG(segs, { h: 150 }) +
-      `<p class="note">Total ${fmtTime(planTotal(segs))}${d.type === "custom" ? `, ${d.intervals.length} intervalos` : ""}</p>`;
+    const segs = compileSegs(d), unit = unitOf(d);
+    gbox.innerHTML = graphSVG(segs, { h: 150, unit }) +
+      `<p class="note">Total ${fmtLen(unit, planTotal(segs))}${d.type === "custom" ? `, ${d.intervals.length} intervalos` : ""}</p>`;
   };
   const renderBody = () => {
     dyn.innerHTML = "";
     if (d.type === "custom") {
+      const l = document.createElement("div");
+      l.className = "row"; l.innerHTML = "<label>Medir los intervalos en</label>";
+      dyn.appendChild(l);
+      dyn.appendChild(chips([["time", "Tiempo"], ["bars", "Compases"]], d.unit, (v) => { d.unit = v; renderBody(); }));
       d.intervals.forEach((iv, i) => dyn.appendChild(ivRow(i)));
       const add = document.createElement("button");
       add.className = "btn-wide"; add.innerHTML = '<i class="fa-solid fa-plus"></i> Añadir intervalo';
       add.disabled = d.intervals.length >= 20;
-      add.onclick = () => { const l = d.intervals[d.intervals.length - 1]; d.intervals.push({ bpm: l.bpm, sec: l.sec, ramp: false }); renderBody(); };
+      add.onclick = () => { const l2 = d.intervals[d.intervals.length - 1]; d.intervals.push({ ...l2, ramp: false }); renderBody(); };
       dyn.appendChild(add);
     } else {
       dyn.appendChild(stepper("BPM inicial", () => d.from, (v) => { d.from = v; updateGraph(); }, 20, 300, (v) => v, 5));
@@ -908,20 +1191,26 @@ function editPractice(existing) {
     updateGraph();
   };
   const ivRow = (i) => {
-    const iv = d.intervals[i], row = document.createElement("div");
+    const iv = d.intervals[i], row = document.createElement("div"), bars = d.unit === "bars";
     row.className = "iv";
+    const dur = bars
+      ? `<div class="iv-f"><label>Compases</label><div class="mst"><button data-a="rm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bars" type="tel" inputmode="numeric" maxlength="3" value="${iv.bars}"><button data-a="rp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>`
+      : `<div class="iv-f"><label>Duración</label><div class="mst"><button data-a="dm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output>${fmtTime(iv.sec)}</output><button data-a="dp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>`;
     row.innerHTML = `<div class="iv-top"><span class="iv-n">${i + 1}</span>
-      <div class="iv-f"><label>BPM</label><div class="mst"><button data-a="bm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" type="tel" inputmode="numeric" maxlength="3" value="${iv.bpm}"><button data-a="bp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>
-      <div class="iv-f"><label>Duración</label><div class="mst"><button data-a="dm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><output>${fmtTime(iv.sec)}</output><button data-a="dp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div></div>
+      <div class="iv-f"><label>BPM</label><div class="mst"><button data-a="bm" aria-label="Menos"><i class="fa-solid fa-minus"></i></button><input class="iv-in" data-k="bpm" type="tel" inputmode="numeric" maxlength="3" value="${iv.bpm}"><button data-a="bp" aria-label="Más"><i class="fa-solid fa-plus"></i></button></div></div>${dur}</div>
       <div class="iv-bot"><button class="ivtog${iv.ramp && i ? " on" : ""}" data-a="tog"${i === 0 ? " disabled" : ""}><i class="fa-solid fa-chart-line"></i> Gradual</button>
       <button data-a="dup"><i class="fa-solid fa-copy"></i> Duplicar</button>
       <button data-a="del"${d.intervals.length === 1 ? " disabled" : ""}><i class="fa-solid fa-trash"></i> Quitar</button></div>`;
-    const inp = row.querySelector("input"), out = row.querySelector("output");
-    inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= 20 && v <= 300) { iv.bpm = v; updateGraph(); } });
-    inp.addEventListener("change", () => { iv.bpm = clamp(parseInt(inp.value, 10) || iv.bpm, 20, 300); inp.value = iv.bpm; updateGraph(); });
+    const out = row.querySelector("output");
+    row.querySelectorAll("input.iv-in").forEach((inp) => {
+      const k = inp.dataset.k, lo = k === "bpm" ? 20 : 1, hi = k === "bpm" ? 300 : 999;
+      inp.addEventListener("input", () => { const v = parseInt(inp.value, 10); if (v >= lo && v <= hi) { iv[k] = v; updateGraph(); } });
+      inp.addEventListener("change", () => { iv[k] = clamp(parseInt(inp.value, 10) || iv[k], lo, hi); inp.value = iv[k]; updateGraph(); });
+    });
     row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
-      const a = b.dataset.a;
-      if (a === "bm" || a === "bp") { iv.bpm = clamp(iv.bpm + (a === "bp" ? 5 : -5), 20, 300); inp.value = iv.bpm; updateGraph(); }
+      const a = b.dataset.a, q = (k) => row.querySelector(`[data-k="${k}"]`);
+      if (a === "bm" || a === "bp") { iv.bpm = clamp(iv.bpm + (a === "bp" ? 5 : -5), 20, 300); q("bpm").value = iv.bpm; updateGraph(); }
+      else if (a === "rm" || a === "rp") { iv.bars = clamp(iv.bars + (a === "rp" ? 1 : -1), 1, 999); q("bars").value = iv.bars; updateGraph(); }
       else if (a === "dm" || a === "dp") { iv.sec = clamp(iv.sec + (a === "dp" ? 15 : -15), 15, 1800); out.textContent = fmtTime(iv.sec); updateGraph(); }
       else if (a === "tog") { iv.ramp = !iv.ramp; b.classList.toggle("on", iv.ramp); updateGraph(); }
       else if (a === "dup") { d.intervals.splice(i + 1, 0, { ...iv }); renderBody(); }
@@ -938,14 +1227,16 @@ function editPractice(existing) {
     b.appendChild(h3("Tipo"));
     b.appendChild(chips([["custom", "Personalizada"], ["fija", "Velocidad fija"], ["progresiva", "Progresiva"]], d.type, (v) => {
       if (v === "custom" && d.type !== "custom") {
-        d.intervals = compileSegs(d).flatMap((s, i) => (s.from === s.to ? [{ bpm: s.to, sec: s.sec, ramp: false }]
-          : [{ bpm: s.from, sec: 15, ramp: false }, { bpm: s.to, sec: Math.max(15, s.sec - 15), ramp: true }])).slice(0, 20);
+        d.unit = "time";
+        d.intervals = compileSegs(d).flatMap((s) => (s.from === s.to ? [{ bpm: s.to, sec: s.len, ramp: false }]
+          : [{ bpm: s.from, sec: 15, ramp: false }, { bpm: s.to, sec: Math.max(15, s.len - 15), ramp: true }])).slice(0, 20);
+        d.intervals.forEach((iv) => { iv.bars = clamp(Math.round((iv.sec * iv.bpm) / 60 / 4), 1, 512); });
       }
       d.type = v; renderBody();
     }));
     dyn = document.createElement("div");
     b.appendChild(dyn);
-    b.insertAdjacentHTML("beforeend", '<p class="note">Personalizada: define cada intervalo con su BPM y duración. "Gradual" sube o baja suavemente desde el intervalo anterior. Fija: sube en pasos. Progresiva: sube de forma continua.</p>');
+    b.insertAdjacentHTML("beforeend", '<p class="note">Personalizada: cada intervalo tiene su BPM y dura un tiempo o un número de compases. "Gradual" sube o baja suavemente desde el intervalo anterior. Fija: sube en pasos. Progresiva: sube de forma continua.</p>');
     renderBody();
   }, [{ label: "Cancelar", value: false }, { label: "Guardar", cls: "primary", value: true }]).then((ok) => {
     if (!ok) return;
@@ -1070,9 +1361,238 @@ requestAnimationFrame(pendLoop);
   pend.addEventListener("pointercancel", () => { active = false; });
 })();
 
+/* ---------- Opciones: cuenta previa, silencios, ayudas ---------- */
+let wakeLock = null;
+async function setWake(on) {
+  if (!on) { if (wakeLock) { try { await wakeLock.release(); } catch { /* ya liberado */ } wakeLock = null; } return true; }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; refreshMore(); });
+    return true;
+  } catch { return false; }
+}
+function refreshMore() {
+  $("btnMore").classList.toggle("active", !!(state.ciOn || state.gapOn || state.flashOn || state.voiceOn || wakeLock));
+}
+$("btnMore").addEventListener("click", () => {
+  let wakeFail = false;
+  sheet("Opciones", (b) => {
+    const render = () => {
+      b.innerHTML = "";
+      b.appendChild(h3("Cuenta previa"));
+      b.appendChild(switchRow("Contar antes de empezar", state.ciOn, (v) => { state.ciOn = v; persist(); refreshMore(); render(); }));
+      if (state.ciOn) b.appendChild(stepper("Compases de cuenta", () => state.ciBars, (v) => { state.ciBars = v; persist(); }, 1, 4));
+      b.appendChild(h3("Silencios periódicos"));
+      b.appendChild(switchRow("Entrenar el pulso interno", state.gapOn, (v) => { state.gapOn = v; persist(); refreshMore(); render(); }));
+      if (state.gapOn) {
+        b.appendChild(stepper("Compases que suenan", () => state.gapPlay, (v) => { state.gapPlay = v; persist(); }, 1, 16));
+        b.appendChild(stepper("Compases en silencio", () => state.gapMute, (v) => { state.gapMute = v; persist(); }, 1, 16));
+        b.insertAdjacentHTML("beforeend", '<p class="note">El metrónomo se calla por turnos para que mantengas el pulso por tu cuenta. La pantalla sigue marcando el tiempo.</p>');
+      }
+      b.appendChild(h3("Ayudas"));
+      b.appendChild(switchRow("Destello de pantalla en cada pulso", state.flashOn, (v) => { state.flashOn = v; persist(); refreshMore(); }));
+      b.appendChild(switchRow("Voz que cuenta los pulsos", state.voiceOn, (v) => { state.voiceOn = v; persist(); refreshMore(); }));
+      b.appendChild(switchRow("Mantener la pantalla encendida", !!wakeLock, async (v) => {
+        wakeFail = !(await setWake(v)) && v;
+        refreshMore(); render();
+      }));
+      if (wakeFail) b.insertAdjacentHTML("beforeend", '<p class="note">Este dispositivo no permite mantener la pantalla encendida.</p>');
+    };
+    render();
+  }, [{ label: "Listo", cls: "primary", value: true }]);
+});
+
+/* ---------- Atajos de teclado ---------- */
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  if (!$("backdrop").hidden || document.querySelector(".view.active").id !== "viewMetro") return;
+  const big = e.shiftKey ? 5 : 1;
+  if (e.code === "Space") { e.preventDefault(); togglePlay(); }
+  else if (e.code === "ArrowUp" || e.code === "ArrowRight") { e.preventDefault(); setBpm(state.bpm + big); }
+  else if (e.code === "ArrowDown" || e.code === "ArrowLeft") { e.preventDefault(); setBpm(state.bpm - big); }
+  else if (e.code === "KeyT") $("tapBtn").click();
+  else if (e.code === "PageUp") setBpm(state.bpm + 10);
+  else if (e.code === "PageDown") setBpm(state.bpm - 10);
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code === "Space" && !(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) e.preventDefault();
+});
+
+/* ---------- Afinador y bordón ---------- */
+const NOTE_NAMES = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"];
+state.a4 = clamp(state.a4 || 440, 400, 480);
+state.drNote = state.drNote === undefined ? 9 : state.drNote;
+state.drOct = clamp(state.drOct || 3, 1, 6);
+state.drFifth = !!state.drFifth;
+const midiFreq = (m) => state.a4 * Math.pow(2, (m - 69) / 12);
+
+// Detección de tono (YIN): devuelve la frecuencia en Hz o -1 si no hay una nota clara.
+function detectPitch(buf, sr) {
+  const N = buf.length, W = N >> 1;
+  let rms = 0;
+  for (let i = 0; i < N; i++) rms += buf[i] * buf[i];
+  if (Math.sqrt(rms / N) < 0.008) return -1;
+  const minTau = Math.floor(sr / 1100), maxTau = Math.min(W - 1, Math.floor(sr / 65));
+  const c = new Float32Array(maxTau + 2);
+  let acc = 0;
+  c[0] = 1;
+  for (let tau = 1; tau <= maxTau; tau++) {
+    let sum = 0;
+    for (let i = 0; i < W; i++) { const x = buf[i] - buf[i + tau]; sum += x * x; }
+    acc += sum;
+    c[tau] = acc ? (sum * tau) / acc : 1;
+  }
+  let tau = -1;
+  for (let t = Math.max(2, minTau); t <= maxTau; t++) {
+    if (c[t] < 0.12) { while (t + 1 <= maxTau && c[t + 1] < c[t]) t++; tau = t; break; }
+  }
+  if (tau < 0) return -1;
+  const a = c[tau - 1], b = c[tau], g = c[tau + 1] === undefined ? c[tau] : c[tau + 1], den = a + g - 2 * b;
+  return sr / (tau + (den ? (a - g) / (2 * den) : 0));
+}
+function noteInfo(freq) {
+  const n = 69 + 12 * Math.log2(freq / state.a4), midi = Math.round(n);
+  return { name: NOTE_NAMES[((midi % 12) + 12) % 12], oct: Math.floor(midi / 12) - 1, cents: (n - midi) * 100, midi };
+}
+
+let tunerOn = false, tunerStream = null, tunerCtx = null, tunerAn = null, tunerBuf = null, tunerRaf = 0, tunerFrame = 0, tunerHist = [], tunerLast = 0;
+function tunerUI(freq) {
+  const note = $("tnNote"), needle = $("tnNeedle"), meter = $("tnMeter");
+  if (freq > 0) {
+    tunerHist.push(freq); if (tunerHist.length > 5) tunerHist.shift();
+    const f = [...tunerHist].sort((a, b) => a - b)[tunerHist.length >> 1], ni = noteInfo(f);
+    tunerLast = performance.now();
+    note.innerHTML = `${ni.name}<sub>${ni.oct}</sub>`;
+    $("tnFreq").textContent = `${f.toFixed(1)} Hz`;
+    const cents = clamp(ni.cents, -50, 50);
+    needle.style.left = `${50 + cents}%`;
+    $("tnCents").textContent = `${cents > 0 ? "+" : ""}${Math.round(ni.cents)} cents`;
+    meter.classList.toggle("ok", Math.abs(ni.cents) < 6);
+    meter.classList.remove("idle");
+  } else if (performance.now() - tunerLast > 500) {
+    tunerHist = [];
+    note.textContent = "--";
+    $("tnFreq").textContent = "Toca una nota";
+    $("tnCents").textContent = "";
+    needle.style.left = "50%";
+    meter.classList.remove("ok"); meter.classList.add("idle");
+  }
+}
+function tunerLoop() {
+  if (!tunerOn) return;
+  if (++tunerFrame % 3 === 0) {
+    tunerAn.getFloatTimeDomainData(tunerBuf);
+    tunerUI(detectPitch(tunerBuf, tunerCtx.sampleRate));
+  }
+  tunerRaf = requestAnimationFrame(tunerLoop);
+}
+function setTunerBtn() {
+  $("tnBtn").innerHTML = tunerOn ? '<i class="fa-solid fa-microphone-slash"></i> Detener afinador' : '<i class="fa-solid fa-microphone"></i> Activar micrófono';
+}
+async function startTuner() {
+  try {
+    tunerStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch {
+    sheet("Micrófono no disponible", (b) => { b.innerHTML = '<p class="note">No se pudo usar el micrófono. Permite el acceso desde los ajustes del navegador y vuelve a intentarlo.</p>'; }, [{ label: "Entendido", cls: "primary", value: true }]);
+    return;
+  }
+  tunerCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = tunerCtx.createMediaStreamSource(tunerStream);
+  tunerAn = tunerCtx.createAnalyser();
+  tunerAn.fftSize = 4096;
+  src.connect(tunerAn);
+  tunerBuf = new Float32Array(tunerAn.fftSize);
+  tunerOn = true; tunerHist = []; tunerFrame = 0;
+  setTunerBtn();
+  tunerUI(-1);
+  tunerLoop();
+}
+function stopTuner() {
+  tunerOn = false;
+  cancelAnimationFrame(tunerRaf);
+  if (tunerStream) tunerStream.getTracks().forEach((t) => t.stop());
+  if (tunerCtx) tunerCtx.close().catch(() => {});
+  tunerStream = tunerCtx = tunerAn = null;
+  setTunerBtn();
+  $("tnNote").textContent = "--";
+  $("tnFreq").textContent = "Toca una nota";
+  $("tnCents").textContent = "";
+  $("tnNeedle").style.left = "50%";
+  $("tnMeter").classList.remove("ok"); $("tnMeter").classList.add("idle");
+}
+$("tnBtn").addEventListener("click", () => (tunerOn ? stopTuner() : startTuner()));
+// El micrófono solo se usa mientras se está en la pestaña del afinador.
+document.querySelectorAll(".tab[data-view]").forEach((t) => t.addEventListener("click", () => {
+  if (tunerOn && t.dataset.view !== "viewTuner") stopTuner();
+}));
+
+// Bordón: nota sostenida con la fundamental y, si se quiere, la quinta.
+let droneOn = false, droneNodes = null;
+const droneFreq = () => midiFreq(12 * (state.drOct + 1) + state.drNote);
+function droneStart() {
+  ensureAudio();
+  const g = ctx.createGain(), f = droneFreq(), oscs = [];
+  g.gain.setValueAtTime(0.0001, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.25);
+  g.connect(master);
+  const add = (type, mult, vol) => {
+    const o = ctx.createOscillator(), og = ctx.createGain();
+    o.type = type; o.frequency.value = f * mult; og.gain.value = vol;
+    o.connect(og); og.connect(g); o.start();
+    oscs.push({ o, mult });
+  };
+  add("sine", 1, 0.7); add("triangle", 1, 0.3); add("sine", 0.5, 0.25);
+  if (state.drFifth) add("sine", 1.5, 0.4);
+  droneNodes = { g, oscs };
+  droneOn = true;
+  droneUI();
+}
+function droneRetune() {
+  if (!droneNodes) return;
+  const f = droneFreq();
+  droneNodes.oscs.forEach(({ o, mult }) => o.frequency.setTargetAtTime(f * mult, ctx.currentTime, 0.03));
+}
+function droneStop() {
+  if (!droneNodes) return;
+  const { g, oscs } = droneNodes;
+  g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.06);
+  setTimeout(() => { oscs.forEach(({ o }) => { try { o.stop(); } catch { /* ya detenido */ } }); g.disconnect(); }, 400);
+  droneNodes = null; droneOn = false;
+  if (!running && !tRunning && silentEl) silentEl.pause();
+  droneUI();
+}
+function droneUI() {
+  const btn = $("drBtn");
+  if (!btn) return;
+  btn.innerHTML = droneOn ? '<i class="fa-solid fa-stop"></i> Detener bordón' : '<i class="fa-solid fa-play"></i> Iniciar bordón';
+  btn.classList.toggle("on", droneOn);
+}
+function renderDrone() {
+  const box = $("droneBox");
+  box.innerHTML = "";
+  box.appendChild(h3("Nota"));
+  box.appendChild(chips(NOTE_NAMES.map((n, i) => [i, n]), state.drNote, (v) => { state.drNote = v; persist(); droneRetune(); }));
+  box.appendChild(stepper("Octava", () => state.drOct, (v) => { state.drOct = v; persist(); droneRetune(); }, 1, 6));
+  box.appendChild(stepper("La central (Hz)", () => Math.round(state.a4), (v) => { state.a4 = v; persist(); droneRetune(); }, 400, 480));
+  box.appendChild(switchRow("Añadir la quinta", state.drFifth, (v) => {
+    state.drFifth = v; persist();
+    if (droneOn) { droneStop(); setTimeout(droneStart, 450); }
+  }));
+  const btn = document.createElement("button");
+  btn.className = "btn-wide"; btn.id = "drBtn";
+  btn.onclick = () => (droneOn ? droneStop() : droneStart());
+  box.appendChild(btn);
+  droneUI();
+}
+
 /* ---------- Arranque ---------- */
 applyTheme();
 renderAll();
 renderSongs();
 renderPractices();
+renderLog();
+renderSongBar();
+renderDrone();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

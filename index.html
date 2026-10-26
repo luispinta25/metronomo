@@ -13,7 +13,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/css/solid.min.css">
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="style.css?v=12">
 <title>Metrónomo</title>
 <script>
 // Aplica el tema antes de pintar para evitar parpadeos.
@@ -32,6 +32,7 @@
 </head>
 <body>
 <div class="scrim"></div>
+<div class="flash" id="flash"></div>
 <div class="app">
 
   <header class="topbar">
@@ -59,6 +60,12 @@
       <div class="poly-dots" id="polyDots" hidden></div>
     </section>
     <div class="status" id="status">&nbsp;</div>
+    <div class="songbar" id="songBar" hidden>
+      <button id="songPrev" aria-label="Canción anterior"><i class="fa-solid fa-backward-step"></i></button>
+      <div class="sb-mid"><span id="songBarName"></span><small id="songBarPos"></small></div>
+      <button id="songNext" aria-label="Canción siguiente"><i class="fa-solid fa-forward-step"></i></button>
+      <button id="songClose" aria-label="Cerrar"><i class="fa-solid fa-xmark"></i></button>
+    </div>
     <div class="run-graph" id="runGraph" hidden></div>
 
     <div class="dial-wrap">
@@ -128,7 +135,7 @@
         <button id="btnSound" aria-label="Sonido"><i class="fa-solid fa-sliders"></i></button>
         <button id="btnTimer" aria-label="Temporizador"><i class="fa-solid fa-stopwatch"></i></button>
         <button id="btnVol" aria-label="Volumen"><i class="fa-solid fa-volume-high"></i></button>
-        <button id="btnAwake" aria-label="Pantalla encendida"><i class="fa-solid fa-mobile-screen"></i></button>
+        <button id="btnMore" aria-label="Opciones"><i class="fa-solid fa-gear"></i></button>
       </div>
     </div>
   </main>
@@ -138,6 +145,14 @@
     <button class="btn-wide" id="saveCur"><i class="fa-solid fa-plus"></i> Guardar ajuste actual</button>
     <ul class="songs" id="songList"></ul>
     <p class="empty" id="songEmpty">Todavía no hay ajustes guardados.</p>
+    <div class="backup">
+      <h3>Copia de seguridad</h3>
+      <div class="two">
+        <button id="btnExport"><i class="fa-solid fa-file-export"></i> Exportar</button>
+        <button id="btnImport"><i class="fa-solid fa-file-import"></i> Importar</button>
+      </div>
+      <p class="note">Guarda un archivo con tus ajustes, repertorio, prácticas e historial, o restaúralo desde uno.</p>
+    </div>
   </main>
 
   <main id="viewPractice" class="view">
@@ -147,12 +162,32 @@
     </div>
     <div class="plist" id="practiceList"></div>
     <p class="empty" id="practiceEmpty">No hay prácticas. Crea una con el botón +.</p>
+    <div class="logbox" id="logBox"></div>
+  </main>
+
+  <main id="viewTuner" class="view">
+    <h1 class="page-title">Afinador</h1>
+    <section class="card tuner">
+      <div class="tn-note" id="tnNote">--</div>
+      <div class="tn-freq" id="tnFreq">Toca una nota</div>
+      <div class="tn-meter idle" id="tnMeter">
+        <div class="tn-zone"></div><div class="tn-needle" id="tnNeedle"></div>
+        <span class="tn-l">-50</span><span class="tn-r">+50</span>
+      </div>
+      <div class="tn-cents" id="tnCents"></div>
+      <button class="btn-wide" id="tnBtn"><i class="fa-solid fa-microphone"></i> Activar micrófono</button>
+    </section>
+    <section class="card drone">
+      <h2>Bordón</h2>
+      <div id="droneBox"></div>
+    </section>
   </main>
 
   <nav class="tabbar">
     <button class="tab active" data-view="viewMetro"><i class="fa-solid fa-gauge-high"></i><span>Metrónomo</span></button>
     <button class="tab" data-view="viewSongs"><i class="fa-solid fa-music"></i><span>Repertorio</span></button>
     <button class="tab" data-view="viewPractice"><i class="fa-solid fa-clock-rotate-left"></i><span>Práctica</span></button>
+    <button class="tab" data-view="viewTuner"><i class="fa-solid fa-wave-square"></i><span>Afinador</span></button>
   </nav>
 </div>
 
@@ -164,6 +199,6 @@
   </div>
 </div>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

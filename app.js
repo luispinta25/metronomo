@@ -124,6 +124,7 @@ function renderBpm() {
   $("tempoName").textContent = tempoName(state.bpm);
   $("ring").style.transform = `rotate(${(state.bpm * 3) % 360}deg)`;
   $("prog").style.strokeDasharray = `${75 * ((state.bpm - 20) / 280)} 100`;
+  updateMedia();
   $("orbBpm").textContent = state.bpm;
   $("weight").style.bottom = `${((300 - state.bpm) / 280) * 88}%`;
   if (rulerPos === null && document.documentElement.dataset.ctl === "regla") drawRuler();
@@ -359,6 +360,7 @@ function setPlayUI(on) {
     b.innerHTML = `<i class="fa-solid fa-${on ? "pause" : "play"}"></i>`;
   });
   $("orbIco").className = `fa-solid fa-${on ? "pause" : "play"}`;
+  updateMedia(true);
 }
 function flashPoly(i) {
   const dots = $("polyDots").children;
@@ -1294,6 +1296,7 @@ function renderRunCtl() {
   box.hidden = !cur;
   $("viewMetro").querySelector(".hero").classList.toggle("runmode", !!run);
   $("viewMetro").classList.toggle("runpanel", !!cur);
+  updateMedia(true);
   $("viewMetro").querySelector(".hero").classList.toggle("compact", !!cur);
   timerRender();
   ctl.innerHTML = "";
@@ -1813,6 +1816,41 @@ function renderDrone() {
   btn.onclick = () => (droneOn ? droneStop() : droneStart());
   box.appendChild(btn);
   droneUI();
+}
+
+/* ---------- Controles de medios (isla dinámica y pantalla de bloqueo) ---------- */
+// Mientras suena, iOS muestra la sesión de audio en la isla dinámica y en el bloqueo:
+// aquí se le da un título, el BPM y botones que controlan el metrónomo.
+const MEDIA_ACTIONS = {
+  play: () => { if (run && run.paused) resumeRun(); else if (!running) start(); },
+  pause: () => { if (run && running) pauseRun(); else if (running) stop(); },
+  stop: () => { if (run) endRun(); else if (running) stop(); },
+  nexttrack: () => { const i = songIdx(); if (i >= 0 && i < songs.length - 1) loadSong(songs[i + 1]); else setBpm(state.bpm + 5); },
+  previoustrack: () => { const i = songIdx(); if (i > 0) loadSong(songs[i - 1]); else setBpm(state.bpm - 5); },
+};
+let mediaKey = "", mediaLast = 0, mediaT = 0;
+function updateMedia(force) {
+  if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
+  const paused = !!(run && run.paused);
+  const title = run ? run.p.name : "Metrónomo";
+  const artist = `${state.bpm} BPM, ${state.num}/${state.den}${paused ? ", en pausa" : ""}`;
+  const key = `${title}|${artist}|${running}|${paused}`;
+  if (key === mediaKey) return;
+  const now = performance.now();
+  if (!force && now - mediaLast < 900) { clearTimeout(mediaT); mediaT = setTimeout(() => updateMedia(true), 900); return; }
+  mediaKey = key; mediaLast = now;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title, artist, album: "LPSOLUTIONS",
+      artwork: [{ src: "icons/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" }],
+    });
+    navigator.mediaSession.playbackState = running ? "playing" : paused ? "paused" : "none";
+  } catch { /* sin controles de medios */ }
+}
+if ("mediaSession" in navigator) {
+  Object.entries(MEDIA_ACTIONS).forEach(([a, fn]) => {
+    try { navigator.mediaSession.setActionHandler(a, () => { fn(); updateMedia(true); }); } catch { /* acción no disponible */ }
+  });
 }
 
 /* ---------- Arranque ---------- */

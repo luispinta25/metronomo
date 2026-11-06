@@ -191,6 +191,7 @@ let ctx = null, master = null, silentEl = null;
 let running = false, nextTime = 0, beatIdx = 0, subIdx = 0, timerId = null, visQueue = [], polyQueue = [];
 let polyNext = 0, polyIdx = 0;
 let barIdx = 0, countLeft = 0, countTotal = 0, halted = false, sessionStart = 0, sessionAcc = 0, barHook = null;
+let bus = null, tickWorker = null, bgSrc = null, bgInfo = null, bgBuf = null, bgKey = "", bgChime = null, bgChimeAt = 0, bgBusy = false;
 
 function silentWav() {
   const n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -222,20 +223,20 @@ function ensureAudio() {
   silentEl.play().catch(() => {});
   if (ctx.state !== "running") ctx.resume();
 }
-function tone(time, type, freq, gain, dur, sweepTo) {
+function tone(time, type, freq, gain, dur, sweepTo, dest) {
   const o = ctx.createOscillator(), e = ctx.createGain();
   o.type = type; o.frequency.setValueAtTime(freq, time);
   if (sweepTo) o.frequency.exponentialRampToValueAtTime(sweepTo, time + dur);
   e.gain.setValueAtTime(0.0001, time);
   e.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), time + 0.002);
   e.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-  o.connect(e); e.connect(master);
+  o.connect(e); e.connect(dest || bus || master);
   o.start(time); o.stop(time + dur + 0.02);
 }
 // El control va de 0 a 1; la ganancia real llega a 3x para que el 100 % suene fuerte.
 const volGain = () => state.vol * 3;
 let noiseBuf = null;
-function noiseBurst(time, gain, dur, ftype, freq, q) {
+function noiseBurst(time, gain, dur, ftype, freq, q, dest) {
   if (!noiseBuf) {
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
@@ -246,7 +247,7 @@ function noiseBurst(time, gain, dur, ftype, freq, q) {
   e.gain.setValueAtTime(0.0001, time);
   e.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), time + 0.002);
   e.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-  s.connect(f); f.connect(e); e.connect(master);
+  s.connect(f); f.connect(e); e.connect(dest || bus || master);
   s.start(time); s.stop(time + dur + 0.02);
 }
 function click(time, level) {
@@ -261,25 +262,34 @@ function polyClick(time, first) {
 // Silencios periódicos: suena "gapPlay" compases y se calla "gapMute", en ciclo.
 const isMuted = () => state.gapOn && barIdx % (state.gapPlay + state.gapMute) >= state.gapPlay;
 
+// En segundo plano iOS frena los temporizadores de JavaScript: se agenda mucho audio por adelantado.
+const LA = () => (document.hidden ? 45 : 0.12);
+// Tempo del instante t: las prácticas por tiempo lo calculan con el reloj de audio.
+const bpmAt = (t) => (run && run.unit === "time" && run.aT0 != null ? planAt(run.segs, Math.max(0, t - run.aT0)).bpm : state.bpm);
+
 function scheduler() {
-  if (halted) return;
-  while (nextTime < ctx.currentTime + 0.12) {
+  if (halted || bgSrc) return;
+  while (nextTime < ctx.currentTime + LA()) {
     // Cuenta previa: solo pulsos, sin subdivisiones ni polirritmo.
     if (countLeft > 0) {
       const k = countTotal - countLeft, b = k % state.num;
       click(nextTime, b === 0 ? 3 : 2);
       visQueue.push({ t: nextTime, beat: b, count: k + 1, total: countTotal });
       nextTime += 60 / state.bpm;
-      if (--countLeft === 0) { beatIdx = 0; subIdx = 0; barIdx = 0; polyNext = nextTime; polyIdx = 0; }
+      if (--countLeft === 0) {
+        beatIdx = 0; subIdx = 0; barIdx = 0; polyNext = nextTime; polyIdx = 0;
+        if (run && run.unit === "time") run.aT0 = nextTime;
+      }
       continue;
     }
+    if (run && run.unit === "time" && run.aT0 != null && nextTime - run.aT0 >= run.total) { run.endAt = nextTime; halted = true; return; }
     let p = patOf(state.pat);
     if (beatIdx >= state.num) beatIdx = 0;
     if (subIdx >= p.div) subIdx = 0;
     // Al inicio de cada compás, una práctica por compases puede cambiar tempo, compás o patrón.
     if (subIdx === 0 && beatIdx === 0 && barHook && barHook(barIdx) === false) { halted = true; return; }
     p = patOf(state.pat);
-    const step = 60 / state.bpm / p.div, muted = isMuted();
+    const step = 60 / bpmAt(nextTime) / p.div, muted = isMuted();
     if (subIdx === 0) {
       const lv = state.levels[beatIdx];
       if (!muted && p.hits[0] && lv > 0) click(nextTime, lv);
@@ -291,20 +301,167 @@ function scheduler() {
     if (++subIdx >= p.div) { subIdx = 0; beatIdx = (beatIdx + 1) % state.num; if (beatIdx === 0) barIdx++; }
   }
   if (state.polyOn && countLeft === 0) {
-    const pd = (60 / state.bpm * state.num) / state.polyN;
-    while (polyNext < ctx.currentTime + 0.12) {
+    while (polyNext < ctx.currentTime + LA()) {
       if (polyIdx >= state.polyN) polyIdx = 0;
       if (!isMuted()) polyClick(polyNext, polyIdx === 0);
       polyQueue.push({ t: polyNext, i: polyIdx });
-      polyNext += pd;
+      polyNext += (60 / bpmAt(polyNext) * state.num) / state.polyN;
       polyIdx = (polyIdx + 1) % state.polyN;
     }
   }
 }
+
+/* ---------- Segundo plano ---------- */
+function newBus() {
+  if (bus) { try { bus.disconnect(); } catch { /* ya desconectado */ } }
+  bus = ctx.createGain();
+  bus.connect(master);
+}
+function killBus() {
+  if (bus) { try { bus.disconnect(); } catch { /* ya desconectado */ } bus = null; }
+}
+function startTicker() {
+  stopTicker();
+  timerId = setInterval(scheduler, 25);
+  try { // un Worker no sufre el mismo frenado de temporizadores que la página
+    const url = URL.createObjectURL(new Blob(["let id=0;onmessage=e=>{clearInterval(id);if(e.data>0)id=setInterval(()=>postMessage(0),e.data)}"], { type: "text/javascript" }));
+    tickWorker = new Worker(url);
+    URL.revokeObjectURL(url);
+    tickWorker.onmessage = () => scheduler();
+    tickWorker.postMessage(25);
+  } catch { tickWorker = null; }
+}
+function stopTicker() {
+  clearInterval(timerId);
+  if (tickWorker) { try { tickWorker.postMessage(0); tickWorker.terminate(); } catch { /* ya cerrado */ } tickWorker = null; }
+}
+// Al volver a primer plano se descarta el audio agendado de más y se retoma en el pulso correcto.
+function resync() {
+  if (!running || !ctx || bgSrc) return;
+  const now = ctx.currentTime;
+  const fut = visQueue.filter((e) => e.t > now + 0.2 && !e.count);
+  if (!fut.length) return;
+  const f = fut[0];
+  if (bus) {
+    const old = bus;
+    old.gain.setValueAtTime(0, Math.max(now, f.t - 0.003));
+    setTimeout(() => { try { old.disconnect(); } catch { /* ya desconectado */ } }, (f.t - now) * 1000 + 300);
+  }
+  bus = ctx.createGain(); bus.connect(master);
+  const pf = polyQueue.find((e) => e.t >= f.t - 0.003);
+  visQueue = visQueue.filter((e) => e.t < f.t);
+  polyQueue = polyQueue.filter((e) => e.t < f.t);
+  beatIdx = f.beat; barIdx = f.bar; subIdx = 0; nextTime = f.t;
+  if (pf) { polyNext = pf.t; polyIdx = pf.i; } else { polyNext = f.t; polyIdx = 0; }
+  halted = false;
+  if (run) run.endAt = 0;
+  // Corrige tempo y compás mostrados: los del compás que suena ahora, no los del audio agendado de más.
+  if (barHook) barHook(f.beat === 0 ? Math.max(0, f.bar - 1) : f.bar);
+  scheduler();
+}
+
+// Metrónomo libre: un ciclo ya renderizado que se reproduce en bucle, sin depender de JavaScript.
+const bgSig = () => JSON.stringify([state.bpm, state.num, state.pat, state.levels, state.sound, state.sound2, state.polyOn, state.polyN, state.gapOn, state.gapPlay, state.gapMute]);
+function cycleInfo() {
+  const p = patOf(state.pat), beat = 60 / state.bpm, bar = beat * state.num, bars = state.gapOn ? state.gapPlay + state.gapMute : 1;
+  return { p, beat, bar, bars, dur: bar * bars, cb: state.num * bars };
+}
+async function prepBg() {
+  if (!ctx || !running || run || bgBusy || typeof OfflineAudioContext === "undefined") return;
+  const ci = cycleInfo(), key = bgSig();
+  if (ci.dur > 90 || ci.dur < 0.2) { bgBuf = null; bgKey = ""; return; }
+  bgBusy = true;
+  try {
+    const sr = 44100, off = new OfflineAudioContext(1, Math.ceil(ci.dur * sr), sr);
+    const sv = { ctx, master, bus, noiseBuf };
+    ctx = off; master = off.createGain(); master.connect(off.destination); bus = null; noiseBuf = null;
+    try {
+      for (let bar = 0; bar < ci.bars; bar++) {
+        if (state.gapOn && bar % (state.gapPlay + state.gapMute) >= state.gapPlay) continue;
+        for (let b = 0; b < state.num; b++) {
+          const lv = state.levels[b];
+          for (let sIdx = 0; sIdx < ci.p.div; sIdx++) {
+            const t = bar * ci.bar + b * ci.beat + (sIdx * ci.beat) / ci.p.div;
+            if (sIdx === 0) { if (ci.p.hits[0] && lv > 0) click(t, lv); } else if (ci.p.hits[sIdx]) click(t, "sub");
+          }
+        }
+        if (state.polyOn) for (let k = 0; k < state.polyN; k++) polyClick(bar * ci.bar + (k * ci.bar) / state.polyN, k === 0);
+      }
+    } finally { ctx = sv.ctx; master = sv.master; bus = sv.bus; noiseBuf = sv.noiseBuf; }
+    bgBuf = await off.startRendering();
+    bgKey = key;
+  } catch { bgBuf = null; bgKey = ""; } finally { bgBusy = false; }
+  if (document.hidden && running && !run && !bgSrc && bgKey === bgSig()) enterBackground();
+}
+function startBgLoop() {
+  const ci = cycleInfo(), p0 = ci.p;
+  const startAbs = barIdx * state.num + beatIdx + subIdx / p0.div;
+  const when = Math.max(nextTime, ctx.currentTime + 0.03);
+  const absAtWhen = startAbs + (when - nextTime) / ci.beat;
+  const src = ctx.createBufferSource();
+  src.buffer = bgBuf; src.loop = true; src.connect(master);
+  src.start(when, ((absAtWhen % ci.cb) * ci.beat) % ci.dur);
+  bgSrc = src;
+  bgInfo = { when, absAtWhen, ci };
+  stopTicker();
+  // Temporizador general: se agenda su aviso final para que suene aunque JavaScript esté congelado.
+  if (tRunning && !tPaused && !state.tRepeat) {
+    const T = ctx.currentTime + Math.max(0, (tEnd - performance.now()) / 1000);
+    bgChime = ctx.createGain(); bgChime.connect(master);
+    [0, 0.2, 0.4].forEach((d) => tone(T + 0.05 + d, "sine", 1320, 0.5, 0.16, undefined, bgChime));
+    bgChimeAt = T;
+    if (state.tStop) { try { src.stop(T); } catch { /* sin parada programada */ } }
+  }
+  return true;
+}
+function endBgLoop() {
+  if (!bgSrc || !bgInfo) return;
+  const { when, absAtWhen, ci } = bgInfo, now = ctx.currentTime;
+  // El bucle aún no había empezado (el audio agendado lo cubría): se cancela y se retoma el programador.
+  if (now < when - 0.05) {
+    try { bgSrc.stop(); bgSrc.disconnect(); } catch { /* ya detenido */ }
+    bgSrc = null; bgInfo = null;
+    if (bgChime) { try { bgChime.disconnect(); } catch { /* ya desconectado */ } bgChime = null; }
+    startTicker();
+    resync();
+    return;
+  }
+  const abs = absAtWhen + Math.max(0, now - when) / ci.beat + 0.15 / ci.beat;
+  const nextAbs = Math.ceil(abs - 1e-9);
+  const tB = when + (nextAbs - absAtWhen) * ci.beat;
+  try { bgSrc.stop(tB); } catch { /* ya detenido */ }
+  bgSrc = null; bgInfo = null;
+  if (bgChime) { try { bgChime.disconnect(); } catch { /* ya desconectado */ } bgChime = null; }
+  barIdx = Math.floor(nextAbs / state.num); beatIdx = nextAbs % state.num; subIdx = 0;
+  nextTime = tB;
+  const pd = ci.bar / state.polyN, barStart = tB - beatIdx * ci.beat;
+  const k = Math.ceil((beatIdx * ci.beat) / pd - 1e-6);
+  polyNext = barStart + k * pd; polyIdx = k;
+  if (k >= state.polyN) { polyNext = barStart + ci.bar; polyIdx = 0; }
+  visQueue = []; polyQueue = []; halted = false;
+  startTicker();
+  scheduler();
+}
+function enterBackground() {
+  if (!running || bgSrc) return;
+  if (!run && countLeft === 0 && bgBuf && bgKey === bgSig()) { startBgLoop(); return; }
+  if (!run && !bgBusy) prepBg(); // si aún no hay ciclo listo, se prepara mientras tanto
+  scheduler(); // adelanta mucho audio antes de que iOS congele el JavaScript
+}
+function leaveBackground() {
+  if (!running) return;
+  try { if (silentEl && silentEl.paused) silentEl.play().catch(() => {}); if (ctx.state !== "running") ctx.resume(); } catch { /* sin audio */ }
+  if (bgSrc) endBgLoop(); else resync();
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) enterBackground(); else leaveBackground(); });
+// Mantiene listo el ciclo del bucle mientras el metrónomo libre suena en primer plano.
+setInterval(() => { if (running && !run && !document.hidden && !bgBusy && bgKey !== bgSig()) prepBg(); }, 1000);
+
 function visLoop() {
   if (!running) return;
-  while (visQueue.length && visQueue[0].t <= ctx.currentTime) flashEntry(visQueue.shift());
-  while (polyQueue.length && polyQueue[0].t <= ctx.currentTime) flashPoly(polyQueue.shift().i);
+  const now = ctx.currentTime;
+  while (visQueue.length && visQueue[0].t <= now) { const e = visQueue.shift(); if (now - e.t < 0.35) flashEntry(e); }
+  while (polyQueue.length && polyQueue[0].t <= now) { const e = polyQueue.shift(); if (now - e.t < 0.35) flashPoly(e.i); }
   requestAnimationFrame(visLoop);
 }
 const NUM_WORDS = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince", "dieciséis"];
@@ -346,7 +503,6 @@ function flashEntry(e) {
   }
   if (run) {
     run.curBeat = e.beat;
-    if (run.t0 === null && run.unit === "time") run.t0 = performance.now();
   } else if (state.gapOn) {
     $("status").textContent = e.muted ? `En silencio, compás ${e.bar + 1}` : `Sonando, compás ${e.bar + 1}`;
   }
@@ -372,6 +528,7 @@ function start(resume) {
   ensureAudio();
   running = true; halted = false;
   beatIdx = 0; subIdx = 0; visQueue = []; polyQueue = []; polyIdx = 0;
+  newBus();
   if (resume) countLeft = 0;
   else {
     barIdx = 0; sessionAcc = 0;
@@ -381,8 +538,11 @@ function start(resume) {
   nextTime = ctx.currentTime + 0.08;
   polyNext = nextTime;
   sessionStart = performance.now();
-  timerId = setInterval(scheduler, 25);
+  // Las prácticas por tiempo miden el avance con el reloj de audio.
+  if (run && run.unit === "time") run.aT0 = resume ? nextTime - (run.pausedEl || 0) : countTotal === 0 ? nextTime : null;
+  startTicker();
   scheduler();
+  if (!run) setTimeout(() => { if (running && !run && bgKey !== bgSig()) prepBg(); }, 400);
   swingBeat = 0; swingPhase = 0;
   setPlayUI(true);
   requestAnimationFrame(visLoop);
@@ -391,7 +551,10 @@ function start(resume) {
 function stop(keepRun) {
   if (!running) return;
   running = false;
-  clearInterval(timerId);
+  stopTicker();
+  if (bgSrc) { try { bgSrc.stop(); } catch { /* ya detenido */ } bgSrc = null; bgInfo = null; }
+  if (bgChime) { try { bgChime.disconnect(); } catch { /* ya desconectado */ } bgChime = null; }
+  killBus();
   sessionAcc += (performance.now() - sessionStart) / 1000;
   if (keepRun !== true) {
     logSession(run ? run.p.name : "Metrónomo libre", sessionAcc);
@@ -652,7 +815,7 @@ const timerSecs = () => (tPaused ? Math.ceil(tLeft / 1000) : Math.max(0, Math.ce
 
 function chime() {
   if (!ctx) return;
-  [0, 0.2, 0.4].forEach((d) => tone(ctx.currentTime + 0.05 + d, "sine", 1320, 0.5, 0.16));
+  [0, 0.2, 0.4].forEach((d) => tone(ctx.currentTime + 0.05 + d, "sine", 1320, 0.5, 0.16, undefined, master));
 }
 function timerRender() {
   const b = $("btnTimer");
@@ -696,7 +859,8 @@ function timerStop() {
   timerRender();
 }
 function timerFinish() {
-  chime();
+  if (!(bgChimeAt && ctx && Math.abs(ctx.currentTime - bgChimeAt) < 900)) chime();
+  bgChimeAt = 0;
   if (state.tStop && running) stop();
   if (state.tRepeat) {
     tEnd = performance.now() + state.timerMin * 60000;
@@ -1131,7 +1295,7 @@ function startRun(p, segs, unit) {
   if (run) endRun();
   runDone = null;
   showView("viewMetro");
-  run = { p, segs, unit, total: planTotal(segs), t0: unit === "time" && !state.ciOn ? performance.now() : null, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0, paused: false, pauseT: 0 };
+  run = { p, segs, unit, total: planTotal(segs), aT0: null, pausedEl: 0, idx: null, bar: 0, curBeat: 0, endAt: 0, lastIdx: 0, paused: false, pauseT: 0 };
   barHook = unit === "bars" ? runBarHook : null;
   if (unit === "time") setBpm(planAt(segs, 0).bpm);
   $("rgSvg").innerHTML = graphSVG(segs, { h: 64, labels: true, axis: false, unit });
@@ -1165,7 +1329,7 @@ function finishRun() {
 // Pausar conserva la práctica: el tiempo y el compás actual quedan donde estaban.
 function pauseRun() {
   if (!run || !running || run.paused) return;
-  run.paused = true; run.pauseT = performance.now();
+  run.paused = true; run.pausedEl = run.aT0 == null ? 0 : Math.max(0, ctx.currentTime - run.aT0);
   stop(true);
   $("status").textContent = "En pausa";
   renderRunCtl();
@@ -1173,7 +1337,6 @@ function pauseRun() {
 function resumeRun() {
   if (!run || !run.paused) return;
   run.paused = false;
-  if (run.unit === "time") { if (run.t0 === null) run.t0 = performance.now(); else run.t0 += performance.now() - run.pauseT; }
   start(true);
   renderRunCtl();
   practiceTick();
@@ -1277,8 +1440,8 @@ function practiceTick() {
     if (run.idx === null) return; // aún en cuenta previa
     el = run.bar + run.curBeat / state.num;
   } else {
-    if (run.t0 === null) return;
-    el = (performance.now() - run.t0) / 1000;
+    if (run.aT0 == null) return;
+    el = Math.max(0, ctx.currentTime - run.aT0);
     if (el >= total) { finishRun(); return; }
     setBpm(planAt(segs, el).bpm);
   }
@@ -1825,9 +1988,15 @@ const MEDIA_ACTIONS = {
   play: () => { if (run && run.paused) resumeRun(); else if (!running) start(); },
   pause: () => { if (run && running) pauseRun(); else if (running) stop(); },
   stop: () => { if (run) endRun(); else if (running) stop(); },
-  nexttrack: () => { const i = songIdx(); if (i >= 0 && i < songs.length - 1) loadSong(songs[i + 1]); else setBpm(state.bpm + 5); },
-  previoustrack: () => { const i = songIdx(); if (i > 0) loadSong(songs[i - 1]); else setBpm(state.bpm - 5); },
+  nexttrack: () => { const i = songIdx(); if (i >= 0 && i < songs.length - 1) loadSong(songs[i + 1]); else setBpm(state.bpm + 5); refreshBgLoop(); },
+  previoustrack: () => { const i = songIdx(); if (i > 0) loadSong(songs[i - 1]); else setBpm(state.bpm - 5); refreshBgLoop(); },
 };
+// Si el bucle de fondo está sonando, se vuelve a preparar con el nuevo tempo.
+function refreshBgLoop() {
+  if (!bgSrc) return;
+  endBgLoop();
+  prepBg();
+}
 let mediaKey = "", mediaLast = 0, mediaT = 0;
 function updateMedia(force) {
   if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
